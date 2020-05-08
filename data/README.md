@@ -14,7 +14,6 @@ To explore the data, you can also run the code in the examine_data Jupyter noteb
 We support a variety of different sentence segmentation tokenizers that have been shown to work with biomedical corpus (see [here](https://github.com/ypruksachatkun-asapp/CLIP/blob/master/data/tokenizers.py#L43), making it 
 easy to swap out and try a variety of different tokenizers on your corpus. To segment your text into sentences, use [this function](https://github.com/ypruksachatkun-asapp/CLIP/blob/master/data/utils.py#L5). 
 
-It is also possible to try different word tokenizers to split sentences into tokens, but that necessitates in our code use of 
-our [`Span`](https://github.com/ypruksachatkun-asapp/CLIP/blob/master/data/utils.py#L20) classes to wrap around each span. For a starting off point on how to use our 
-preprocessing code to do something similar (and make use of our word tokenizers), we suggest you look at our [data generation code](https://github.com/ypruksachatkun-asapp/CLIP/blob/master/data/data_generation.py#L179), which 
-generates `Spans` from offsets and text, and then uses our `WordTokenizers` and `SentenceTokenizers` to generate the final token offsets . 
+It is also possible to try different word tokenizers to split sentences into tokens, which you can do with the use of our `WordTokenizer` class. Given a specific type of WordTokenizer `wt_type`, you can use WordTokenizers as below
+`word_tokenizer = WordTokenizer.from_type(wt_type)`
+`tokens = word_tokenizer.tokenize(sentence)`
