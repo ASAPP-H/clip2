@@ -16,4 +16,5 @@ easy to swap out and try a variety of different tokenizers on your corpus. To se
 
 It is also possible to try different word tokenizers to split sentences into tokens, which you can do with the use of our `WordTokenizer` class. Given a specific type of WordTokenizer `wt_type`, you can use WordTokenizers as below
 `word_tokenizer = WordTokenizer.from_type(wt_type)`
+
 `tokens = word_tokenizer.tokenize(sentence)`
