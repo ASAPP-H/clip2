@@ -4,7 +4,7 @@ export BERT_MODEL=$3  # bert-base-cased emilyalsentzer/Bio_ClinicalBERT
 
 export MAX_LENGTH=256
 export BATCH_SIZE=32
-export SAVE_STEPS=100
+export SAVE_STEPS=1000
 export SEED=1
 export MODEL_NAME_OR_PATH=${5:=\"\"}
 export DATA_DIR=bert_data/$2

@@ -37,7 +37,8 @@ import torch
 
 torch.manual_seed(0)
 
-device = torch.device("cpu")
+#device = torch.device("cpu")
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 class TaggerModel(torch.nn.Module):
@@ -329,6 +330,6 @@ def do_pass_chunk_into_sentences(
     return (
         loss,
         evaluation.get_evaluation(
-            pred_lists, gold_lists, model.list_of_possible_tags, source="mimic"
+            pred_lists, gold_lists, model.list_of_possible_tags,# source="mimic"
         ),
     )

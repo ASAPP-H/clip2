@@ -244,7 +244,7 @@ def train_model(
         model.train()
         model.zero_grad()
         write_preds = False
-        if epoch % WRITE_PREDS_FREQ == 0:
+        if epoch % writer_preds_freq == 0:
             write_preds = True
         loss, trf1 = do_pass(
             train,

@@ -684,7 +684,7 @@ def main():
     parser.add_argument(
         "--save_steps",
         type=int,
-        default=500,
+        default=1000,
         help="Save checkpoint every X updates steps.",
     )
     parser.add_argument(

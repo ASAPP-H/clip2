@@ -3,7 +3,7 @@ from utils import *
 import os
 import sys
 
-pwd = os.environ.get('"CLIP_DIR')
+pwd = os.environ.get('CLIP_DIR')
 DATA_DIR = "%s/data/processed/" % pwd
 exp_name = "non_multilabel"
 
@@ -28,7 +28,7 @@ def main(args):
         use_crf=True,
         learning_rate=float(args[1]),
         epochs=int(args[2]),
-        WRITE_PREDS_FREQ=10,
+        writer_preds_freq=10,
         embeddings_type="BioWord",
         list_of_possible_tags=["followup"],
         embeddings_path="%s/CLIP/experiments/tagger/embeddings" % pwd,
