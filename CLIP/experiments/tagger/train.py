@@ -68,7 +68,7 @@ def create_vocab_mappings(train, dev, test):
     flat_tags = []
     # Here, we keep the structure of sentences,
     # so we have to treat things slightly differently.
-    for token_sentences, tag_sentences, _, _ in train + dev + test:
+    for token_sentences, tag_sentences, _ in train + dev + test:
         for token_sent in token_sentences:
             for token in token_sent:
                 for char in token:
