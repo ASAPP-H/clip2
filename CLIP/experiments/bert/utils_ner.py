@@ -50,7 +50,7 @@ class InputFeatures(object):
         self.label_ids = label_ids
 
 
-def read_examples_from_file_orig(data_dir, mode):
+def read_examples_from_file(data_dir, mode):
     file_path = os.path.join(data_dir, "{}.txt".format(mode))
     guid_index = 1
     examples = []
@@ -60,13 +60,7 @@ def read_examples_from_file_orig(data_dir, mode):
         for line in f:
             if line.startswith("-DOCSTART-") or line == "" or line == "\n":
                 if words:
-                    examples.append(
-                        InputExample(
-                            guid="{}-{}".format(mode, guid_index),
-                            words=words,
-                            labels=labels,
-                        )
-                    )
+                    examples.append(InputExample(guid="{}-{}".format(mode, guid_index), words=words, labels=labels))
                     guid_index += 1
                     words = []
                     labels = []
@@ -79,17 +73,8 @@ def read_examples_from_file_orig(data_dir, mode):
                     # Examples could have no label for mode = "test"
                     labels.append("O")
         if words:
-            examples.append(
-                InputExample(
-                    guid="{}-{}".format(mode, guid_index), words=words, labels=labels
-                )
-            )
+            examples.append(InputExample(guid="{}-{}".format(mode, guid_index), words=words, labels=labels))
     return examples
-
-
-def get_maximum_length(examples):
-    lengths = [len(x.words) for x in examples]
-    print("The maximum number of tokens in a document is %s" % max(lengths))
 
 
 def convert_examples_to_features(
@@ -117,6 +102,7 @@ def convert_examples_to_features(
     """
 
     label_map = {label: i for i, label in enumerate(label_list)}
+
     features = []
     for (ex_index, example) in enumerate(examples):
         if ex_index % 10000 == 0:
@@ -126,22 +112,10 @@ def convert_examples_to_features(
         label_ids = []
         for word, label in zip(example.words, example.labels):
             word_tokens = tokenizer.tokenize(word)
-            if len(word_tokens) == 0:
-                continue
             tokens.extend(word_tokens)
             # Use the real label id for the first token of the word, and padding ids for the remaining tokens
-            try:
-                label_ids.extend(
-                    [label_map[label]] + [pad_token_label_id] * (len(word_tokens) - 1)
-                )
-            except:
-                import pdb
+            label_ids.extend([label_map[label]] + [pad_token_label_id] * (len(word_tokens) - 1))
 
-                pdb.set_trace()
-            if len(tokens) != len(label_ids):
-                import pdb
-
-                pdb.set_trace()
         # Account for [CLS] and [SEP] with "- 2" and with "- 3" for RoBERTa.
         special_tokens_count = 3 if sep_token_extra else 2
         if len(tokens) > max_seq_length - special_tokens_count:
@@ -193,9 +167,7 @@ def convert_examples_to_features(
         padding_length = max_seq_length - len(input_ids)
         if pad_on_left:
             input_ids = ([pad_token] * padding_length) + input_ids
-            input_mask = (
-                [0 if mask_padding_with_zero else 1] * padding_length
-            ) + input_mask
+            input_mask = ([0 if mask_padding_with_zero else 1] * padding_length) + input_mask
             segment_ids = ([pad_token_segment_id] * padding_length) + segment_ids
             label_ids = ([pad_token_label_id] * padding_length) + label_ids
         else:
@@ -203,6 +175,7 @@ def convert_examples_to_features(
             input_mask += [0 if mask_padding_with_zero else 1] * padding_length
             segment_ids += [pad_token_segment_id] * padding_length
             label_ids += [pad_token_label_id] * padding_length
+
         assert len(input_ids) == max_seq_length
         assert len(input_mask) == max_seq_length
         assert len(segment_ids) == max_seq_length
@@ -218,12 +191,7 @@ def convert_examples_to_features(
             logger.info("label_ids: %s", " ".join([str(x) for x in label_ids]))
 
         features.append(
-            InputFeatures(
-                input_ids=input_ids,
-                input_mask=input_mask,
-                segment_ids=segment_ids,
-                label_ids=label_ids,
-            )
+            InputFeatures(input_ids=input_ids, input_mask=input_mask, segment_ids=segment_ids, label_ids=label_ids)
         )
     return features
 
@@ -236,14 +204,4 @@ def get_labels(path):
             labels = ["O"] + labels
         return labels
     else:
-        return [
-            "O",
-            "B-MISC",
-            "I-MISC",
-            "B-PER",
-            "I-PER",
-            "B-ORG",
-            "I-ORG",
-            "B-LOC",
-            "I-LOC",
-        ]
+        return ["O", "B-MISC", "I-MISC", "B-PER", "I-PER", "B-ORG", "I-ORG", "B-LOC", "I-LOC"]
