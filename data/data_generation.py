@@ -21,7 +21,7 @@ from os.path import isfile, join
 from os import listdir
 
 source_dir = "MIMIC/source"
-note_pd = pd.read_csv(os.path.join(source_dir, "NOTEEVENTS.csv"))
+raw_notes = pd.read_csv(os.path.join(source_dir, "NOTEEVENTS.csv"))
 test_document_ids = json.load(open("test_document_ids", "r"))
 
 
@@ -108,10 +108,20 @@ def get_dataset_raw_MIMIC_offsets(split="MIMIC_train"):
     if "i2b2" in split:
         dataset = get_i2b2_files()
         return dataset, split
-    dataset_mapping = json.load(open("%s_offset_mapping.jsonl" % split))
+    if split == 'MIMIC_train':
+        note_pd = pd.read_csv('mimic-train.csv')
+    elif split == 'MIMIC_val':
+        note_pd = pd.read_csv('mimic-val.csv')
+    elif split == 'MIMIC_test':
+        note_pd = pd.read_csv('mimic-test.csv')
+    elif split == 'i2b2_test':
+        note_pd = pd.read_csv('i2b2-test.csv')
+    #dataset_mapping = json.load(open("%s_offset_mapping.jsonl" % split))
+    dataset_mapping = json.load(open("v1-%s-mapping.json" % split.lower().replace('_', '-')))
     dataset = []
     for note_id in dataset_mapping.keys():
-        orig_MIMIC_note = note_pd[note_pd["ROW_ID"] == int(note_id)]
+        #orig_MIMIC_note = raw_notes[raw_notes["ROW_ID"] == int(note_id)]
+        orig_MIMIC_note = note_pd[note_pd["id"] == int(note_id)]
         spans = []
         for tag_name, offsets in dataset_mapping[note_id].items():
             for j, offset in enumerate(offsets):
@@ -124,7 +134,7 @@ def get_dataset_raw_MIMIC_offsets(split="MIMIC_train"):
                         end=offset["end_offset"],
                     )
                 )
-        # Mkae sure that the start_offset and end_offset is from token level.
+        # Make sure that the start_offset and end_offset is from token level.
         dataset.append([str(note_id), orig_MIMIC_note["TEXT"].iloc[0], spans])
     return pd.DataFrame(dataset, columns=["id", "text", "labels"]), split
 
@@ -198,17 +208,18 @@ def preprocess_dataset(
 def make_test_files():
     # Merge the MIMIC and i2b2 test set files.
     for cast in ["binary", "finegrained"]:
-        mimic_test = pd.read_csv("processed/MIMIC_test_%s.csv" % cast)
+        mimic_test = pd.read_csv("processed2/MIMIC_test_%s.csv" % cast)
         mimic_test["source"] = "mimic"
-        i2b2_test = pd.read_csv("processed/i2b2-test_%s.csv" % cast)
+        i2b2_test = pd.read_csv("processed2/i2b2-test_%s.csv" % cast)
         i2b2_test["source"] = "i2b2"
         mimic_test = mimic_test.append(i2b2_test)
         current = pd.DataFrame(columns=["document_id", "tokens", "labels", "source"])
         mimic_test["document_id"] = mimic_test["document_id"].apply(lambda x: str(x))
         for doc_id in test_document_ids:
+            #import pdb; pdb.set_trace()
             doc = mimic_test[mimic_test["document_id"] == doc_id].iloc[0]
             current = current.append(doc)
-        current.to_csv("processed/test_%s.csv" % cast)
+        current.to_csv("processed2/test_%s.csv" % cast)
 
 
 if __name__ == "__main__":
@@ -222,9 +233,9 @@ if __name__ == "__main__":
         val_name: val_pd,
         mtest_name: mimic_test_pd,
     }
-    os.makedirs("processed", exist_ok=True)
+    os.makedirs("processed2", exist_ok=True)
     for name, dataset in datasets.items():
-        preproc_file = "processed/%s_finegrained.csv" % name
+        preproc_file = "processed2/%s_finegrained.csv" % name
         preproc_dataset = preprocess_dataset(
             dataset,
             word_tokenizer_type="nltk",
@@ -233,7 +244,7 @@ if __name__ == "__main__":
             name=name,
         )
         preproc_dataset.to_csv(preproc_file)
-        preproc_file = "processed/%s_binary.csv" % name
+        preproc_file = "processed2/%s_binary.csv" % name
         preproc_dataset = preprocess_dataset(
             dataset,
             word_tokenizer_type="nltk",
