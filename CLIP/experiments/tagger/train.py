@@ -135,7 +135,10 @@ def get_embeddings(type_, path, id_to_token):
         if word.lower() in pretrained:
             pretrained_list.append(np.array(pretrained[word.lower()]))
         else:
-            random_vector = np.random.uniform(-scale, scale, [DIM_EMBEDDING])
+            if word == '__PAD__':
+                random_vector = np.zeros(DIM_EMBEDDING)
+            else:
+                random_vector = np.random.uniform(-scale, scale, [DIM_EMBEDDING])
             pretrained_list.append(random_vector)
     return pretrained_list
 

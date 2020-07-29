@@ -136,6 +136,7 @@ class SentenceTokenizer:
             def tokenize(text: str):
                 paragraphs = syntok.segmenter.analyze(text)
                 all_sentences = []
+                sent_offsets = []
                 for paragraph in paragraphs:
                     for sentence in paragraph:
                         all_sentences.append(
@@ -143,9 +144,10 @@ class SentenceTokenizer:
                                 [f"{token.spacing}{token.value}" for token in sentence]
                             )
                         )
+                        sent_offsets.append((sentence[0].offset, sentence[-1].offset + len(sentence[-1].value)))
                     # NOTE: uncomment to restore more of the original document text
                     # all_sentences.append('\n\n')
-                return all_sentences
+                return all_sentences, sent_offsets
 
         else:
             raise ValueError(f"Unknown tokenizer type: {type}")

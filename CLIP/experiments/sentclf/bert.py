@@ -43,6 +43,7 @@ from transformers import (
 
 from bert_model import BertForSequenceMultilabelClassification
 from constants import *
+import multilabel_eval
 from neural_baselines import SentDataset
 
 logger = logging.getLogger(__name__)
@@ -57,7 +58,7 @@ def collator(batch, tokenizer):
         label = np.zeros(len(LABEL_TYPES))
         label[label_ixs] = 1
         labels.append(label)
-    tokd = tokenizer(sents, padding=True)
+    tokd = tokenizer(sents, padding=True, max_length = 512, truncation=True)
     input_ids, token_type_ids, attention_mask = tokd['input_ids'], tokd['token_type_ids'], tokd['attention_mask']
     toks = torch.LongTensor(input_ids)
     mask = torch.LongTensor(attention_mask)
@@ -65,7 +66,12 @@ def collator(batch, tokenizer):
     return {'input_ids': toks, 'attention_mask': mask, 'labels': labels}
 
 def compute_metrics(x):
-    import pdb; pdb.set_trace()
+    yhat_raw = 1 / (1 + np.exp(-x.predictions))
+    yhat = np.round(yhat_raw)
+    y = x.label_ids
+    metrics = multilabel_eval.all_metrics(yhat, y, k=3, yhat_raw=yhat_raw,calc_auc=True,label_order=LABEL_TYPES)
+    multilabel_eval.print_metrics(metrics, True)
+    return metrics
 
 def main():
     # See all possible arguments in src/transformers/training_args.py
@@ -75,7 +81,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("train_fname", type=str)
     parser.add_argument("model", choices=['bert', 'clinicalbert'])
-    parser.add_argument("--max_epochs", type=int, default=10)
+    parser.add_argument("--max_epochs", type=int, default=5)
     parser.add_argument("--criterion", type=str, default="f1_micro", required=False, help="metric to use for early stopping")
     parser.add_argument("--patience", type=int, default=5, required=False, help="epochs to wait for improved criterion before early stopping (default 3)")
     parser.add_argument("--lr", type=float, default=3e-4)
@@ -83,7 +89,9 @@ def main():
     parser.add_argument("--batch_size", type=int, default=16)
     parser.add_argument("--seed", type=int, default=11, help="random seed")
     parser.add_argument("--max_steps", type=int, default=-1, help="put a positive number to limit number of training steps for debugging")
+    parser.add_argument("--eval_steps", type=int, default=1000, help="number of steps between evaluations during training")
     parser.add_argument("--cache_dir",default="",type=str,help="Where do you want to store the pre-trained models downloaded from s3")
+    parser.add_argument("--run_test", action="store_true", help="set to run on test too after running on dev at the end")
     args = parser.parse_args()
 
     if args.model == 'bert':
@@ -110,11 +118,15 @@ def main():
     # The .from_pretrained methods guarantee that only one local process can concurrently
     # download model & vocab.
 
+    label2id = {label:ix for ix,label in enumerate(LABEL_TYPES)}
+    id2label = {ix:label for label,ix in label2id.items()}
     config = BertConfig.from_pretrained(
         args.model,
         num_labels=num_labels,
         finetuning_task="text_classification",
         cache_dir=args.cache_dir if args.cache_dir else None,
+        label2id=label2id,
+        id2label=id2label,
     )
     tokenizer = BertTokenizer.from_pretrained(
         args.model,
@@ -144,12 +156,13 @@ def main():
             output_dir = out_dir,
             do_train=True,
             do_eval=True,
-            do_predict=True,
+            do_predict=args.run_test,
             evaluate_during_training=True,
             max_steps=args.max_steps,
-            learning_rate=args.lr,
+            #learning_rate=args.lr,
             num_train_epochs=args.max_epochs,
             save_total_limit=10,
+            eval_steps=args.eval_steps,
             seed=args.seed,
             )
 
@@ -168,52 +181,34 @@ def main():
         trainer.train(
             model_path=args.model if os.path.isdir(args.model) else None
         )
-        trainer.save_model()
-        # For convenience, we also re-save the tokenizer to the same directory,
-        # so that you can share your model easily on huggingface.co/models =)
-        if trainer.is_world_master():
-            tokenizer.save_pretrained(args.output_dir)
+        if args.max_steps < 0:
+            trainer.save_model()
 
     # Evaluation
     eval_results = {}
-    if args.do_eval:
-        logger.info("*** Evaluate ***")
+    logger.info("*** Evaluate ***")
 
-        # Loop to handle MNLI double evaluation (matched, mis-matched)
-        eval_datasets = [eval_dataset]
-        if args.task_name == "mnli":
-            mnli_mm_data_args = dataclasses.replace(args, task_name="mnli-mm")
-            eval_datasets.append(
-                GlueDataset(args, tokenizer=tokenizer, mode="dev", cache_dir=model_args.cache_dir)
-            )
+    #trainer.compute_metrics = compute_metrics(eval_dataset.args.task_name)
+    eval_result = trainer.evaluate(eval_dataset=eval_dataset)
 
-        for eval_dataset in eval_datasets:
-            trainer.compute_metrics = build_compute_metrics_fn(eval_dataset.args.task_name)
-            eval_result = trainer.evaluate(eval_dataset=eval_dataset)
+    output_eval_file = os.path.join(
+        training_args.output_dir, f"eval_results_{eval_dataset.args.task_name}.txt"
+    )
+    if trainer.is_world_master():
+        with open(output_eval_file, "w") as writer:
+            logger.info("***** Eval results {} *****".format(eval_dataset.args.task_name))
+            for key, value in eval_result.items():
+                logger.info("  %s = %s", key, value)
+                writer.write("%s = %s\n" % (key, value))
 
-            output_eval_file = os.path.join(
-                training_args.output_dir, f"eval_results_{eval_dataset.args.task_name}.txt"
-            )
-            if trainer.is_world_master():
-                with open(output_eval_file, "w") as writer:
-                    logger.info("***** Eval results {} *****".format(eval_dataset.args.task_name))
-                    for key, value in eval_result.items():
-                        logger.info("  %s = %s", key, value)
-                        writer.write("%s = %s\n" % (key, value))
-
-            eval_results.update(eval_result)
+    eval_results.update(eval_result)
 
     if training_args.do_predict:
         logging.info("*** Test ***")
         test_datasets = [test_dataset]
-        if data_args.task_name == "mnli":
-            mnli_mm_data_args = dataclasses.replace(data_args, task_name="mnli-mm")
-            test_datasets.append(
-                GlueDataset(mnli_mm_data_args, tokenizer=tokenizer, mode="test", cache_dir=model_args.cache_dir)
-            )
-
         for test_dataset in test_datasets:
             predictions = trainer.predict(test_dataset=test_dataset).predictions
+            import pdb; pdb.set_trace()
             predictions = np.argmax(predictions, axis=1)
 
             output_test_file = os.path.join(
@@ -227,11 +222,6 @@ def main():
                         item = test_dataset.get_labels()[item]
                         writer.write("%d\t%s\n" % (index, item))
     return eval_results
-
-
-def _mp_fn(index):
-    # For xla_spawn (TPUs)
-    main()
 
 
 if __name__ == "__main__":

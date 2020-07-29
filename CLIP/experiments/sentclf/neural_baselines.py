@@ -1,8 +1,11 @@
 import argparse
 from collections import Counter, defaultdict
 from datetime import date
+import glob
 import os
+import pickle
 import random
+import sys
 import time
 
 import numpy as np
@@ -15,24 +18,18 @@ import torch.optim as optim
 from tqdm import tqdm
 
 import multilabel_eval
+sys.path.append('../tagger')
+from train import get_embeddings
 
-LABEL_TYPES = ['I-Imaging-related followup',
- 'I-Appointment-related followup',
- 'I-Medication-related followups',
- 'I-Procedure-related followup',
- 'I-Lab-related followup',
- 'I-Case-specific instructions for patient',
- 'I-Other helpful contextual information',
- ]
-
-DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+from constants import *
 
 class CNN(nn.Module):
 
-    def __init__(self, embed_file, embed_size, vocab_size, num_filter_maps=100, filter_size=4):
+    def __init__(self, pretrained_embs, embed_size, vocab_size, num_filter_maps=100, filter_size=4):
         super(CNN, self).__init__()
-        if embed_file:
-            print("loading pretrained embeddings")
+        if pretrained_embs:
+            embs = torch.Tensor(pretrained_embs)
+            self.embed = nn.Embedding.from_pretrained(embs, freeze=False)
         else:
             self.embed = nn.Embedding(vocab_size, embed_size, padding_idx=0)
         self.conv = nn.Conv1d(embed_size, num_filter_maps, kernel_size=filter_size, padding=round(filter_size/2))
@@ -88,11 +85,15 @@ class SentDataset(Dataset):
             self.tok_cnt.update(sent)
         # add 1 for pad token
         self.word2ix.update({word: ix+1 for ix,(word,count) in enumerate(sorted(self.tok_cnt.items(), key=lambda x: x[0])) if count > self.min_cnt})
+        # add UNK to the end
+        self.word2ix[UNK] = len(self.word2ix)
         self.ix2word = {ix:word for word,ix in self.word2ix.items()}
 
     def set_vocab(self, vocab_file):
         # add 1 for pad token
         self.word2ix.update({row.strip(): ix+1 for ix,row in enumerate(open(vocab_file))})
+        # add UNK to the end
+        self.word2ix[UNK] = len(self.word2ix)
         self.ix2word = {ix:word for word,ix in self.word2ix.items()}
 
 def collate(batch, word2ix):
@@ -101,7 +102,7 @@ def collate(batch, word2ix):
     batch = sorted(batch, key=lambda x: -len(x[0]))
     max_length = len(batch[0][0])
     for sent, label, doc_id in batch:
-        sent = [word2ix.get(w, len(word2ix)) for w in sent]
+        sent = [word2ix.get(w, word2ix[UNK]) for w in sent]
         sent.extend([0 for ix in range(len(sent), max_length)])
         sents.append(sent)
         label_ixs = [LABEL_TYPES.index(l) for l in label]
@@ -150,18 +151,27 @@ def main(args):
         tr_data.set_vocab(args.vocab_file)
     tr_loader = DataLoader(tr_data, batch_size=args.batch_size, shuffle=True, collate_fn=lambda batch: collate(batch, tr_data.word2ix))
     dv_data = SentDataset(dev_fname, tr_data.word2ix)
-    dv_loader = DataLoader(dv_data, batch_size=1, shuffle=False, collate_fn=collate)
+    dv_loader = DataLoader(dv_data, batch_size=1, shuffle=False, collate_fn=lambda batch: collate(batch, tr_data.word2ix))
+
+    # load pre-trained embeddings
+    if args.embed_file is None or len(glob.glob(args.embed_file)) == 0:
+        word_list = [word for ix,word in sorted(tr_data.ix2word.items(), key=lambda x: x[0])]
+        import pdb; pdb.set_trace()
+        pretrained_embs = get_embeddings("BioWord", f"{PWD}/CLIP/experiments/tagger/embeddings/", word_list)
+        emb_out_fname = 'embs.pkl'
+        pickle.dump(pretrained_embs, open(emb_out_fname, 'wb'))
+    else:
+        pretrained_embs = pickle.load(open(args.embed_file, 'rb'))
+
 
     # add one for UNK
-    model = CNN(args.embed_file, args.embed_size, len(tr_data.word2ix)+1)
+    model = CNN(pretrained_embs, args.embed_size, len(tr_data.word2ix)+1)
     model.to(DEVICE)
 
     optimizer = optim.Adam(model.parameters(), weight_decay=args.weight_decay, lr=args.lr)
 
     timestamp = time.strftime('%b_%d_%H:%M:%S', time.localtime())
     out_dir = f'results/{args.model}_{timestamp}'
-    if not os.path.exists(out_dir):
-        os.mkdir(out_dir)
 
     losses = []
     metrics_hist = defaultdict(list)
@@ -187,11 +197,11 @@ def main(args):
             y = []
             for ix, x in tqdm(enumerate(dv_loader)):
                 sent, label, doc_id = x
-                pred, _ = model(sent, label)
-                pred = pred.numpy()[0]
+                pred, _ = model(sent.to(DEVICE), label.to(DEVICE))
+                pred = pred.cpu().numpy()[0]
                 yhat_raw.append(pred)
                 yhat.append(np.round(pred))
-                y.append(label.numpy()[0])
+                y.append(label.cpu().numpy()[0])
             yhat = np.array(yhat)
             yhat_raw = np.array(yhat_raw)
             y = np.array(y)
@@ -199,12 +209,16 @@ def main(args):
 
             for name, metric in metrics.items():
                 metrics_hist[name].append(metric)
+
+            # save best model, creating results dir if needed
+            if not os.path.exists(out_dir):
+                os.mkdir(out_dir)
             is_best = check_best_model_and_save(model, metrics_hist, args.criterion, out_dir)
             if is_best:
                 best_epoch = epoch
 
-            if early_stop(metrics_hist, criterion, patience):
-                print(f"{criterion} hasn't improved in {patience} epochs, early stoping...")
+            if early_stop(metrics_hist, args.criterion, args.patience):
+                print(f"{args.criterion} hasn't improved in {args.patience} epochs, early stoping...")
                 break
             multilabel_eval.print_metrics(metrics, True)
 
@@ -215,11 +229,11 @@ if __name__ == "__main__":
     parser.add_argument("--embed_file", type=str, help="path to a file holding pre-trained token embeddings")
     parser.add_argument("--max_epochs", type=int, default=100)
     parser.add_argument("--criterion", type=str, default="f1_micro", required=False, help="metric to use for early stopping")
-    parser.add_argument("--patience", type=int, default=3, required=False, help="epochs to wait for improved criterion before early stopping (default 5)")
+    parser.add_argument("--patience", type=int, default=5, required=False, help="epochs to wait for improved criterion before early stopping (default 5)")
     parser.add_argument("--lr", type=float, default=0.001)
     parser.add_argument("--weight_decay", type=float, default=0)
     parser.add_argument("--batch_size", type=int, default=16)
-    parser.add_argument("--embed_size", type=int, default=128)
+    parser.add_argument("--embed_size", type=int, default=200)
     parser.add_argument("--vocab_file", type=str, help="path to precomputed vocab")
     parser.add_argument("--seed", type=int, default=11, help="random seed")
     args = parser.parse_args()

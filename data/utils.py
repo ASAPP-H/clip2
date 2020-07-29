@@ -6,15 +6,27 @@ def get_sentences_list(text: str, model_type: str) -> t.List[str]:
     """
     Splits document text into a list of sentences, given some model.
     """
-    return list(map(SentenceTokenizer.from_type(model_type).tokenize, text))
+    sentences = []
+    sent_offsets = []
+    #for x in map(SentenceTokenizer.from_type(model_type).tokenize, text):
+    #    import pdb; pdb.set_trace()
+    #    sentences.append(x[0])
+    #    sent_offsets.append(x[1])
+    stok = SentenceTokenizer.from_type(model_type)
+    if isinstance(text, list):
+        sentences, sent_offsets = list(zip(*map(stok.tokenize, text)))
+    elif isinstance(text, str):
+        sentences, sent_offsets = stok.tokenize(text)
+    return sentences, sent_offsets
 
 
 def section_tokenize(text, st_types):
     sentences = [text]
     for st_type in st_types:
-        sentences = get_sentences_list(sentences, st_type)
+        sentences, sent_offsets = get_sentences_list(sentences, st_type)
         sentences = [sent for tokenized_sent in sentences for sent in tokenized_sent]
-    return sentences
+        sent_offsets = [so for sent_offset in sent_offsets for so in sent_offset]
+    return sentences, sent_offsets
 
 
 def sentence_to_token(

@@ -180,12 +180,15 @@ def preprocess_dataset(
     name=None,
 ) -> str:
     rows = []
+    doc_offsets = []
+    doc_labels = []
+    doc_ids = []
     for i in tqdm(range(len(documents)), desc="preprocessing"):
         doc = documents.iloc[i]
         text = doc["text"]
         if "i2b2" in name:
             text = " ".join([x for y in doc["text"] for x in y])
-        sentences = section_tokenize(text, sentence_tokenizer_type)
+        sentences, sent_offsets = section_tokenize(text, sentence_tokenizer_type)
         spans = doc["labels"]
         tokens, labels = sentence_to_token(text, sentences, word_tokenizer_type, spans)
         list_of_pos_label_types = [
@@ -202,15 +205,29 @@ def preprocess_dataset(
         else:
             labels = tags_to_IO_finegrained(labels, list_of_pos_label_types)
         rows.append({"document_id": doc["id"], "tokens": tokens, "labels": labels})
-    return pd.DataFrame(rows)
+        sent_labels = []
+        for sent_ix, (tks, lbls) in enumerate(zip(tokens, labels)):
+            span_types = set()
+            for ix, (tk, lbl) in enumerate(zip(tks, lbls)):
+                span_types.update(set(lbl))
+            if 'O' in span_types:
+                span_types.remove('O')
+            if len(span_types) > 0:
+                sent_labels.append(sorted(span_types))
+            else:
+                sent_labels.append(['O'])
+        doc_labels.append(sent_labels)
+        doc_offsets.append(sent_offsets)
+        doc_ids.append(doc['id'])
+    return pd.DataFrame(rows), doc_labels, doc_offsets, doc_ids
 
 
-def make_test_files():
+def make_test_files(dir_name):
     # Merge the MIMIC and i2b2 test set files.
     for cast in ["binary", "finegrained"]:
-        mimic_test = pd.read_csv("processed2/MIMIC_test_%s.csv" % cast)
+        mimic_test = pd.read_csv(f"{dir_name}/MIMIC_test_{cast}.csv")
         mimic_test["source"] = "mimic"
-        i2b2_test = pd.read_csv("processed2/i2b2-test_%s.csv" % cast)
+        i2b2_test = pd.read_csv(f"{dir_name}/i2b2-test_{cast}.csv")
         i2b2_test["source"] = "i2b2"
         mimic_test = mimic_test.append(i2b2_test)
         current = pd.DataFrame(columns=["document_id", "tokens", "labels", "source"])
@@ -219,10 +236,16 @@ def make_test_files():
             #import pdb; pdb.set_trace()
             doc = mimic_test[mimic_test["document_id"] == doc_id].iloc[0]
             current = current.append(doc)
-        current.to_csv("processed2/test_%s.csv" % cast)
+        current.to_csv(f"{dir_name}/test_{cast}.csv")
 
 
 if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("sent_tok", choices=['stanfordnlp_pretrained', 'stanfordnlp_whitespace', 'nltk', 'nnsplit', 'deepsegment', 'wboag', 'syntok'])
+    parser.add_argument("word_tok", choices=['stanfordnlp_pretrained', 'stanfordnlp_whitespace', 'nltk', 'syntok', 'nnsplit'])
+    args = parser.parse_args()
+
     train_pd, tr_name = get_dataset_raw_MIMIC_offsets(("MIMIC_train"))
     i2b2_test_pd, itest_name = get_dataset_raw_MIMIC_offsets(("i2b2-test"))
     val_pd, val_name = get_dataset_raw_MIMIC_offsets(("MIMIC_val"))
@@ -233,25 +256,41 @@ if __name__ == "__main__":
         val_name: val_pd,
         mtest_name: mimic_test_pd,
     }
-    os.makedirs("processed2", exist_ok=True)
+    dir_name = f"processed_{args.sent_tok}_{args.word_tok}_072920"
+    os.makedirs(dir_name, exist_ok=True)
     for name, dataset in datasets.items():
-        preproc_file = "processed2/%s_finegrained.csv" % name
-        preproc_dataset = preprocess_dataset(
+        preproc_file = f"{dir_name}/{name}_finegrained.csv"
+        preproc_dataset, doc_labels, doc_offsets, doc_ids = preprocess_dataset(
             dataset,
-            word_tokenizer_type="nltk",
-            sentence_tokenizer_type=["nltk"],
+            word_tokenizer_type=args.word_tok,
+            sentence_tokenizer_type=[args.sent_tok],
             cast="finegrained",
             name=name,
         )
+        with open(f'{dir_name}/{name}_finegrained_sent.jsonl', 'w') as of:
+            for doc_id, offsets, labels in zip(doc_ids, doc_offsets, doc_labels):
+                spans = []
+                for sent_ix, (offset, label) in enumerate(zip(offsets, labels)):
+                    for lbl in label:
+                        if lbl != 'O':
+                            span = Span(
+                                id=sent_ix,
+                                type=lbl,
+                                document_id=doc_id,
+                                start=offset[0],
+                                end=offset[1]
+                                )
+                            of.write(json.dumps(span.__dict__) + "\n")
+
         preproc_dataset.to_csv(preproc_file)
-        preproc_file = "processed2/%s_binary.csv" % name
-        preproc_dataset = preprocess_dataset(
+        preproc_file = f"{dir_name}/{name}_binary.csv"
+        preproc_dataset, doc_labels, doc_offsets, doc_ids = preprocess_dataset(
             dataset,
-            word_tokenizer_type="nltk",
-            sentence_tokenizer_type=["nltk"],
+            word_tokenizer_type=args.word_tok,
+            sentence_tokenizer_type=[args.sent_tok],
             cast="binary",
             name=name,
         )
         preproc_dataset.to_csv(preproc_file)
 
-    make_test_files()
+    make_test_files(dir_name)
