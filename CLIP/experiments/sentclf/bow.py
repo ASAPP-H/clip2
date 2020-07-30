@@ -90,6 +90,13 @@ metrics = multilabel_eval.all_metrics(
         )
 multilabel_eval.print_metrics(metrics, True)
 
+thresh, best_thresh_metrics = multilabel_eval.metrics_v_thresholds(yhat_raw, np.asarray(yy_dv.todense()))
+print(f"best threshold metrics (threshold = {thresh})")
+multilabel_eval.print_metrics(best_thresh_metrics)
+
+label_type_metrics = multilabel_eval.f1_per_label_type(yhat_raw, np.asarray(yy_dv.todense()), label_types, thresh)
+multilabel_eval.print_per_label_metrics(label_type_metrics)
+
 for ix, label_name in enumerate(label_types):
     print(f"###{label_name}###")
     feats = clf.coef_[ix]

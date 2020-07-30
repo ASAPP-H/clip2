@@ -280,6 +280,13 @@ def main(args):
         print(args)
         multilabel_eval.print_metrics(metrics, True)
 
+        thresh, best_thresh_metrics = multilabel_eval.metrics_v_thresholds(yhat_raw, y)
+        print(f"best threshold metrics (threshold = {thresh})")
+        multilabel_eval.print_metrics(best_thresh_metrics)
+
+        label_type_metrics = multilabel_eval.f1_per_label_type(yhat_raw, y, LABEL_TYPES, thresh)
+        multilabel_eval.print_per_label_metrics(label_type_metrics)
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("train_fname", type=str)

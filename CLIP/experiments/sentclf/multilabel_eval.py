@@ -56,8 +56,31 @@ def all_metrics(yhat, y, k=8, yhat_raw=None, calc_auc=True, label_order=[]):
 
     return metrics
 
-def f1_per_label_type(yhat, y):
-    pass
+def metrics_v_thresholds(yhat_raw, y):
+    names = ["acc", "prec", "rec", "f1"]
+    thresholds = np.arange(0,1,.01)[1:]
+    metric_threshs = defaultdict(list)
+    for thresh in thresholds:
+        yhat = (yhat_raw > thresh).astype(int)
+        ymic = y.ravel()
+        yhatmic = yhat.ravel()
+        micro = all_micro(yhatmic, ymic)
+        macro = all_macro(yhat, y)
+        for name, val in zip(names, micro):
+            metric_threshs[f'{name}_micro'].append(val)
+        for name, val in zip(names, macro):
+            metric_threshs[f'{name}_macro'].append(val)
+    best_ix = np.nanargmax(metric_threshs['f1_micro'])
+    best_thresh = thresholds[best_ix]
+    best_thresh_metrics = {name: vals[best_ix] for name, vals in metric_threshs.items()}
+    return best_thresh, best_thresh_metrics
+
+def f1_per_label_type(yhat_raw, y, label_order, thresh):
+    yhat = (yhat_raw > thresh).astype(int)
+    metrics = {}
+    for ix,label in enumerate(label_order):
+        metrics[f"{label}-f1"] = f1_score(y[:,ix], yhat[:,ix])
+    return metrics
 
 def all_macro(yhat, y):
     return macro_accuracy(yhat, y), macro_precision(yhat, y), macro_recall(yhat, y), macro_f1(yhat, y)
@@ -322,6 +345,10 @@ def intersect_size(yhat, y, axis):
     #axis=0 for label-level union (macro). axis=1 for instance-level
     return np.logical_and(yhat, y).sum(axis=axis).astype(float)
 
+def print_per_label_metrics(metrics):
+    print(f"Image, appt, medication, procedure, lab, case, other")
+    print("%.4f, %.4f, %.4f, %.4f, %.4f, %.4f, %.4f" % (metrics['I-Imaging-related followup-f1'], metrics['I-Appointment-related followup-f1'], metrics['I-Medication-related followups-f1'], metrics['I-Procedure-related followup-f1'], metrics['I-Lab-related followup-f1'], metrics['I-Case-specific instructions for patient-f1'], metrics['I-Other helpful contextual information-f1']))
+
 def print_metrics(metrics, per_label=False):
     print()
     if "auc_macro" in metrics.keys():
@@ -338,8 +365,7 @@ def print_metrics(metrics, per_label=False):
         print("[MICRO] accuracy, precision, recall, f-measure")
         print("%.4f, %.4f, %.4f, %.4f" % (metrics["acc_micro"], metrics["prec_micro"], metrics["rec_micro"], metrics["f1_micro"]))
     if per_label:
-        print(f"Image, appt, medication, procedure, lab, case, other")
-        print("%.4f, %.4f, %.4f, %.4f, %.4f, %.4f, %.4f" % (metrics['I-Imaging-related followup-f1'], metrics['I-Appointment-related followup-f1'], metrics['I-Medication-related followups-f1'], metrics['I-Procedure-related followup-f1'], metrics['I-Lab-related followup-f1'], metrics['I-Case-specific instructions for patient-f1'], metrics['I-Other helpful contextual information-f1']))
+        print_per_label_metrics(metrics)
     for metric, val in metrics.items():
         if metric.find("rec_at") != -1:
             print("%s: %.4f" % (metric, val))
