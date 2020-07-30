@@ -41,7 +41,7 @@ from transformers import (
     set_seed,
 )
 
-from bert_model import BertForSequenceMultilabelClassification
+from bert_model import BertForSequenceMultilabelClassification, BertCNNForSequenceMultilabelClassification
 from constants import *
 import multilabel_eval
 from neural_baselines import SentDataset
@@ -84,13 +84,14 @@ def main():
     parser.add_argument("--max_epochs", type=int, default=5)
     parser.add_argument("--criterion", type=str, default="f1_micro", required=False, help="metric to use for early stopping")
     parser.add_argument("--patience", type=int, default=5, required=False, help="epochs to wait for improved criterion before early stopping (default 3)")
-    parser.add_argument("--lr", type=float, default=3e-4)
+    parser.add_argument("--lr", type=float, default=5e-5)
     parser.add_argument("--weight_decay", type=float, default=0)
-    parser.add_argument("--batch_size", type=int, default=16)
+    parser.add_argument("--batch_size", type=int, default=8)
     parser.add_argument("--seed", type=int, default=11, help="random seed")
     parser.add_argument("--max_steps", type=int, default=-1, help="put a positive number to limit number of training steps for debugging")
     parser.add_argument("--eval_steps", type=int, default=1000, help="number of steps between evaluations during training")
     parser.add_argument("--cache_dir",default="",type=str,help="Where do you want to store the pre-trained models downloaded from s3")
+    parser.add_argument("--cnn_on_top", action="store_true", help="set to use CNN on top of bert embedded tokens")
     parser.add_argument("--run_test", action="store_true", help="set to run on test too after running on dev at the end")
     args = parser.parse_args()
 
@@ -132,12 +133,20 @@ def main():
         args.model,
         cache_dir=args.cache_dir if args.cache_dir else None,
     )
-    model = BertForSequenceMultilabelClassification.from_pretrained(
-        args.model,
-        from_tf=bool(".ckpt" in args.model),
-        config=config,
-        cache_dir=args.cache_dir if args.cache_dir else None,
-    )
+    if args.cnn_on_top:
+        model = BertCNNForSequenceMultilabelClassification.from_pretrained(
+            args.model,
+            from_tf=bool(".ckpt" in args.model),
+            config=config,
+            cache_dir=args.cache_dir if args.cache_dir else None,
+        )
+    else:
+        model = BertForSequenceMultilabelClassification.from_pretrained(
+            args.model,
+            from_tf=bool(".ckpt" in args.model),
+            config=config,
+            cache_dir=args.cache_dir if args.cache_dir else None,
+        )
 
     # Get datasets
     #train

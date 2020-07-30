@@ -45,6 +45,9 @@ def build_data_and_label_matrices(fname, cvec, tvec, lvec, fit=False):
         tX = tvec.transform(corpus)
         yy = lvec.transform(labels)
 
+    #needed to make parallel training work due to bug in scipy https://github.com/scikit-learn/scikit-learn/issues/6614#issuecomment-209922294
+    cX.sort_indices()
+    tX.sort_indices()
     return cX, tX, yy
 
 cvec = CountVectorizer()
@@ -68,7 +71,7 @@ clf = OneVsRestClassifier(LogisticRegression(
     penalty=args.penalty,
     l1_ratio=args.l1_ratio,
     solver=solver,
-    ))#, n_jobs=-1)
+    ), n_jobs=7)
 print(f"training {args.feature_type} BOW")
 if args.feature_type == 'tfidf':
     clf.fit(tX, yy)
