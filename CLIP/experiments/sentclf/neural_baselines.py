@@ -2,12 +2,14 @@ import argparse
 from collections import Counter, defaultdict
 from datetime import date
 import glob
+import json
 import os
 import pickle
 import random
 import sys
 import time
 
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import torch
@@ -128,6 +130,22 @@ def check_best_model_and_save(model, metrics_hist, criterion, out_dir):
             is_best = True
     return is_best
 
+def save_metrics(metrics_hist, out_dir):
+    # save predictions
+    if out_dir is not None and not os.path.exists(out_dir):
+        os.mkdir(out_dir)
+    with open(f'{out_dir}/metrics.json', 'w') as of:
+        json.dump(metrics_hist, of, indent=1)
+    # make and save plot
+    for metric in metrics_hist:
+        plt.figure()
+        plt.plot(metrics_hist[metric])
+        plt.xlabel('epoch')
+        plt.ylabel(metric)
+        plt.title(f"dev {metric} vs. epochs")
+        plt.savefig(f'{out_dir}/dev_{metric}_plot.png')
+        plt.close()
+
 def early_stop(metrics_hist, criterion, patience):
     if len(metrics_hist[criterion]) >= patience:
         if criterion == 'loss':
@@ -177,6 +195,7 @@ def main(args):
     metrics_hist = defaultdict(list)
     best_epoch = 0
     model.train()
+    stop_training = False
     for epoch in range(args.max_epochs):
         for batch_ix, batch in tqdm(enumerate(tr_loader)):
             sents, labels, doc_ids = batch
@@ -213,14 +232,53 @@ def main(args):
             # save best model, creating results dir if needed
             if not os.path.exists(out_dir):
                 os.mkdir(out_dir)
+            save_metrics(metrics_hist, out_dir)
             is_best = check_best_model_and_save(model, metrics_hist, args.criterion, out_dir)
             if is_best:
                 best_epoch = epoch
 
             if early_stop(metrics_hist, args.criterion, args.patience):
-                print(f"{args.criterion} hasn't improved in {args.patience} epochs, early stoping...")
+                print(f"{args.criterion} hasn't improved in {args.patience} epochs, early stopping...")
+                stop_training = True
                 break
             multilabel_eval.print_metrics(metrics, True)
+ 
+        if stop_training:
+            break
+
+    # save args
+    with open(f'{out_dir}/args.json', 'w') as of:
+        of.write(json.dumps(args.__dict__, indent=2) + "\n")
+
+    if args.max_epochs > 0:
+        # save the model at the end
+        sd = model.state_dict()
+        torch.save(sd, out_dir + "/model.pth")
+
+        # reload the best model
+        print(f"\nReloading and evaluating model with best {args.criterion} (epoch {best_epoch})")
+        sd = torch.load(f'{out_dir}/model_best_{args.criterion}.pth')
+        model.load_state_dict(sd)
+
+    # eval on dev at end
+    with torch.no_grad():
+        model.eval()
+        yhat_raw = []
+        yhat = []
+        y = []
+        for ix, x in tqdm(enumerate(dv_loader)):
+            sent, label, doc_id = x
+            pred, _ = model(sent.to(DEVICE), label.to(DEVICE))
+            pred = pred.cpu().numpy()[0]
+            yhat_raw.append(pred)
+            yhat.append(np.round(pred))
+            y.append(label.cpu().numpy()[0])
+        yhat = np.array(yhat)
+        yhat_raw = np.array(yhat_raw)
+        y = np.array(y)
+        metrics = multilabel_eval.all_metrics(yhat, y, k=3, yhat_raw=yhat_raw, calc_auc=True, label_order=LABEL_TYPES)
+        print(args)
+        multilabel_eval.print_metrics(metrics, True)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -234,6 +292,8 @@ if __name__ == "__main__":
     parser.add_argument("--weight_decay", type=float, default=0)
     parser.add_argument("--batch_size", type=int, default=16)
     parser.add_argument("--embed_size", type=int, default=200)
+    parser.add_argument("--num_filter_maps", type=int, default=100)
+    parser.add_argument("--filter_size", type=int, default=4)
     parser.add_argument("--vocab_file", type=str, help="path to precomputed vocab")
     parser.add_argument("--seed", type=int, default=11, help="random seed")
     args = parser.parse_args()
