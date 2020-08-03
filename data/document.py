@@ -6,9 +6,9 @@ import typing as t
 
 import boto3
 import pandas as pd
-from dotenv import load_dotenv, find_dotenv
-
-load_dotenv(find_dotenv())
+#from dotenv import load_dotenv, find_dotenv
+#
+#load_dotenv(find_dotenv())
 
 DEBUG = {"True": True, "False": False, None: False}.get(os.environ.get("DEBUG"), False)
 print("DEBUG: ", DEBUG, type(DEBUG))

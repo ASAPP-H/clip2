@@ -98,7 +98,7 @@ class SentDataset(Dataset):
         self.word2ix[UNK] = len(self.word2ix)
         self.ix2word = {ix:word for word,ix in self.word2ix.items()}
 
-def collate(batch, word2ix):
+def collate(batch, word2ix, task):
     sents, labels, doc_ids = [], [], []
     # sort by decreasing length
     batch = sorted(batch, key=lambda x: -len(x[0]))
@@ -107,10 +107,14 @@ def collate(batch, word2ix):
         sent = [word2ix.get(w, word2ix[UNK]) for w in sent]
         sent.extend([0 for ix in range(len(sent), max_length)])
         sents.append(sent)
-        label_ixs = [LABEL_TYPES.index(l) for l in label]
-        label = np.zeros(len(LABEL_TYPES))
-        label[label_ixs] = 1
-        labels.append(label)
+        if task == 'finegrained':
+            label_ixs = [LABEL_TYPES.index(l) for l in label]
+            label = np.zeros(len(LABEL_TYPES))
+            label[label_ixs] = 1
+            labels.append(label)
+        else:
+            import pdb; pdb.set_trace()
+            labels.append(label)
         doc_ids.append(doc_id)
     return torch.LongTensor(sents), torch.Tensor(labels), doc_ids
 
@@ -167,15 +171,15 @@ def main(args):
                 of.write(word + "\n")
     else:
         tr_data.set_vocab(args.vocab_file)
-    tr_loader = DataLoader(tr_data, batch_size=args.batch_size, shuffle=True, collate_fn=lambda batch: collate(batch, tr_data.word2ix))
+    tr_loader = DataLoader(tr_data, batch_size=args.batch_size, shuffle=True, collate_fn=lambda batch: collate(batch, tr_data.word2ix, args.task))
     dv_data = SentDataset(dev_fname, tr_data.word2ix)
-    dv_loader = DataLoader(dv_data, batch_size=1, shuffle=False, collate_fn=lambda batch: collate(batch, tr_data.word2ix))
+    dv_loader = DataLoader(dv_data, batch_size=1, shuffle=False, collate_fn=lambda batch: collate(batch, tr_data.word2ix, args.task))
 
     # load pre-trained embeddings
     if args.embed_file is None or len(glob.glob(args.embed_file)) == 0:
         word_list = [word for ix,word in sorted(tr_data.ix2word.items(), key=lambda x: x[0])]
-        import pdb; pdb.set_trace()
         pretrained_embs = get_embeddings("BioWord", f"{PWD}/CLIP/experiments/tagger/embeddings/", word_list)
+        import pdb; pdb.set_trace()
         emb_out_fname = 'embs.pkl'
         pickle.dump(pretrained_embs, open(emb_out_fname, 'wb'))
     else:
@@ -292,6 +296,7 @@ if __name__ == "__main__":
     parser.add_argument("train_fname", type=str)
     parser.add_argument("model", choices=['cnn', 'lstm'])
     parser.add_argument("--embed_file", type=str, help="path to a file holding pre-trained token embeddings")
+    parser.add_argument("--task", choices=['binary', 'finegrained'], default='finegrained')
     parser.add_argument("--max_epochs", type=int, default=100)
     parser.add_argument("--criterion", type=str, default="f1_micro", required=False, help="metric to use for early stopping")
     parser.add_argument("--patience", type=int, default=5, required=False, help="epochs to wait for improved criterion before early stopping (default 5)")

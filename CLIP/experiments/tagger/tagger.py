@@ -126,6 +126,7 @@ class TaggerModel(torch.nn.Module):
             concat_vectors = word_vectors
 
         # Run the LSTM over the input, reshaping data for efficiency
+        import pdb; pdb.set_trace()
         packed_words = torch.nn.utils.rnn.pack_padded_sequence(
             concat_vectors, lengths, True
         )
@@ -274,6 +275,7 @@ def do_pass_chunk_into_sentences(
 
                     pdb.set_trace()
             model.to(device)
+            import pdb; pdb.set_trace()
             # Construct computation
             batch_loss, output = model(
                 input_array.to(device),

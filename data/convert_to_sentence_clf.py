@@ -21,7 +21,7 @@ doc_num_sentences = Counter()
 doc_num_span_sentences = Counter()
 doc_frac_sentences_span = {}
 of = open(args.fname.replace('.csv', '.sentclf.csv'), 'w')
-bof = open(args.fname.replace('.csv', '.sentclf.blah.csv').replace('finegrained', 'binary'), 'w')
+bof = open(args.fname.replace('.csv', '.sentclf.csv').replace('finegrained', 'binary'), 'w')
 w = csv.writer(of)
 bw = csv.writer(bof)
 w.writerow(['doc_id', 'sentence', 'labels'])
@@ -38,7 +38,6 @@ for row_ix, row in tqdm(enumerate(r)):
         if 'O' in span_types:
             span_types.remove('O')
         if len(span_types) > 0:
-            import pdb; pdb.set_trace()
             sentence_num_spans.append(len(span_types))
         w.writerow([doc_id, tks, list(span_types)])
         bw.writerow([doc_id, tks, len(span_types) > 0])

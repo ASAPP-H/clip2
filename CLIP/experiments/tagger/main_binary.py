@@ -4,13 +4,17 @@ import os
 import sys
 
 pwd = os.environ.get('CLIP_DIR')
-DATA_DIR = "%s/data/processed/" % pwd
+DATA_DIR = "%s/data/final_splits/" % pwd
 exp_name = "non_multilabel"
 
 run_name = "sentence_structurel_with_crf"
-train_file_name = "MIMIC_train_binary.csv"
-dev_file_name = "MIMIC_val_binary.csv"
-test_file_name = "test_binary.csv"
+#train_file_name = "MIMIC_train_binary.csv"
+#dev_file_name = "MIMIC_val_binary.csv"
+#test_file_name = "test_binary.csv"
+train_file_name = "mimic-train.binary.bio.export.csv"
+dev_file_name = "mimic-valid.binary.bio.export.csv"
+test_file_name = "mimic-test.binary.bio.export.csv"
+
 exp_name = "outputs_binary"
 train = read_sentence_structure(os.path.join(DATA_DIR, train_file_name))
 dev = read_sentence_structure(os.path.join(DATA_DIR, dev_file_name))

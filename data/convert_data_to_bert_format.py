@@ -122,22 +122,22 @@ def write_to_bert_format(fname, ofname, flag):
 
 
 dataset_map = {
-    "test": "test_finegrained.csv",
-    "train": "MIMIC_train_finegrained.csv",
-    "val": "MIMIC_val_finegrained.csv",
+    "test": "test.binary.ks.csv",
+    "train": "mimic-train.binary.bio.export.csv",
+    "val": "mimic-valid.binary.bio.export.csv",
 }
-os.makedirs("bert_data", exist_ok=True)
-os.makedirs("bert_data/binary", exist_ok=True)
+os.makedirs("bert_data_v1", exist_ok=True)
+os.makedirs("bert_data_v1/binary", exist_ok=True)
 for split in ["train", "val", "test"]:
-    orig_file_name = os.path.join("processed/%s" % dataset_map[split])
+    orig_file_name = os.path.join("final_splits/%s" % dataset_map[split])
     orig_file_name = orig_file_name.replace("finegrained", "binary")
-    output_name = os.path.join("bert_data/binary/%s.txt" % split)
+    output_name = os.path.join("bert_data_v1/binary/%s.txt" % split)
     write_to_bert_format(orig_file_name, output_name, "binary")
 
 for tag_name in list_of_label_types:
-    os.makedirs("bert_data/%s" % tag_name, exist_ok=True)
+    os.makedirs("bert_data_v1/%s" % tag_name, exist_ok=True)
     for split in ["train", "val", "test"]:
-        output_name = os.path.join("bert_data/%s/%s.txt" % (tag_name, split))
-        orig_file_name = os.path.join("processed/%s" % dataset_map[split])
+        output_name = os.path.join("bert_data_v1/%s/%s.txt" % (tag_name, split))
+        orig_file_name = os.path.join("final_splits/%s" % dataset_map[split])
         fine_tag = "I-%s" % tag_name
         write_to_bert_format(orig_file_name, output_name, fine_tag)

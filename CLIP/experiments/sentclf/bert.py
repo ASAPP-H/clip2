@@ -200,6 +200,8 @@ def main():
     #trainer.compute_metrics = compute_metrics(eval_dataset.args.task_name)
     eval_result = trainer.evaluate(eval_dataset=eval_dataset)
 
+    import pdb; pdb.set_trace()
+
     output_eval_file = os.path.join(
         training_args.output_dir, f"eval_results_{eval_dataset.args.task_name}.txt"
     )
