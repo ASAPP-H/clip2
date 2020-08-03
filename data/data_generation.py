@@ -256,7 +256,7 @@ if __name__ == "__main__":
         val_name: val_pd,
         mtest_name: mimic_test_pd,
     }
-    dir_name = f"processed_{args.sent_tok}_{args.word_tok}_072920"
+    dir_name = f"processed_{args.sent_tok}_{args.word_tok}_080320"
     os.makedirs(dir_name, exist_ok=True)
     for name, dataset in datasets.items():
         preproc_file = f"{dir_name}/{name}_finegrained.csv"
@@ -267,20 +267,30 @@ if __name__ == "__main__":
             cast="finegrained",
             name=name,
         )
-        with open(f'{dir_name}/{name}_finegrained_sent.jsonl', 'w') as of:
-            for doc_id, offsets, labels in zip(doc_ids, doc_offsets, doc_labels):
+        # reformat with sentence-level labels for loading into reconciliation tool
+        if name == tr_name:
+            data = []
+            for surrogate_doc, doc_id, offsets, labels in zip(dataset['text'], doc_ids, doc_offsets, doc_labels):
                 spans = []
                 for sent_ix, (offset, label) in enumerate(zip(offsets, labels)):
                     for lbl in label:
                         if lbl != 'O':
                             span = Span(
                                 id=sent_ix,
-                                type=lbl,
+                                type=lbl[2:], # get rid of I- prefix
                                 document_id=doc_id,
                                 start=offset[0],
                                 end=offset[1]
                                 )
-                            of.write(json.dumps(span.__dict__) + "\n")
+                            spans.append(span)
+                recon_format_spans = str([[span.id, span.type, span.start, span.end - span.start] for span in spans])
+                recon_format_tokens = str({'tokens': [(s, 0) for s in surrogate_doc.split(' ')]})
+                # make up user id, empty notes
+                data.append(['1234321', '', doc_id, recon_format_spans, recon_format_tokens])
+
+            df = pd.DataFrame(data, columns=['user_id', 'user_notes', 'document_id', 'annotations', 'document'])
+            df.to_csv(f'{dir_name}/{name}_finegrained_sent_recon.csv', index=False)
+                            #of.write(json.dumps(span.__dict__) + "\n")
 
         preproc_dataset.to_csv(preproc_file)
         preproc_file = f"{dir_name}/{name}_binary.csv"
