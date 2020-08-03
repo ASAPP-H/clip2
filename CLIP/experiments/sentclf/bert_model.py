@@ -58,6 +58,7 @@ class BertCNNForSequenceMultilabelClassification(BertPreTrainedModel):
         self.bert = BertModel(config)
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
         self.conv = nn.Conv1d(768, num_filter_maps, kernel_size=filter_size, padding=round(filter_size/2))
+        nn.init.xavier_uniform_(self.conv.weight)
         self.classifier = nn.Linear(num_filter_maps, config.num_labels)
 
         self.init_weights()
