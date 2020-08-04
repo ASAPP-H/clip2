@@ -25,7 +25,7 @@ sys.path.append('../tagger')
 from train import get_embeddings
 
 from constants import *
-from bow import metrics_v_thresholds
+from bow import metrics_v_thresholds, metric_thresholds_multilabel
 
 class CNN(nn.Module):
 
@@ -174,8 +174,8 @@ def early_stop(metrics_hist, criterion, patience):
     else:
         return False
 
-def high_prec_false_positives(dv_loader, yhat_raw, y, prec_90_thresh, out_dir):
-    preds = yhat_raw[:,1] > prec_90_thresh
+def high_prec_false_positives(dv_loader, yhat_raw, y, prec_90_thresh, out_dir, label_name):
+    preds = yhat_raw > prec_90_thresh
     fps = ~np.array(y).astype(bool) & preds
     fp_ixs = set(np.where(fps == True)[0])
     fp_sents = []
@@ -183,13 +183,13 @@ def high_prec_false_positives(dv_loader, yhat_raw, y, prec_90_thresh, out_dir):
         _, _, _, toks = x
         if ix in fp_ixs:
             fp_sents.append(' '.join(toks[0]))
-    with open(f'{out_dir}/prec_90_fps.txt', 'w') as of:
+    with open(f'{out_dir}/{label_name}_prec_90_fps.txt', 'w') as of:
         for sent in fp_sents:
             of.write(sent + "\n")
     return fp_sents 
 
-def high_rec_false_negatives(dv_loader, yhat_raw, y, rec_90_thresh, out_dir):
-    preds = yhat_raw[:,1] > rec_90_thresh
+def high_rec_false_negatives(dv_loader, yhat_raw, y, rec_90_thresh, out_dir, label_name):
+    preds = yhat_raw > rec_90_thresh
     fns = np.array(y).astype(bool) & ~preds
     fn_ixs = set(np.where(fns == True)[0])
     fn_sents = []
@@ -197,7 +197,7 @@ def high_rec_false_negatives(dv_loader, yhat_raw, y, rec_90_thresh, out_dir):
         _, _, _, toks = x
         if ix in fn_ixs:
             fn_sents.append(' '.join(toks[0]))
-    with open(f'{out_dir}/rec_90_fns.txt', 'w') as of:
+    with open(f'{out_dir}/{label_name}_rec_90_fns.txt', 'w') as of:
         for sent in fn_sents:
             of.write(sent + "\n")
     return fn_sents 
@@ -352,6 +352,12 @@ def main(args):
 
             label_type_metrics = multilabel_eval.f1_per_label_type(yhat_raw, y, LABEL_TYPES, thresh)
             multilabel_eval.print_per_label_metrics(label_type_metrics)
+
+            thresh_metrics, rec_90_threshs, prec_90_threshs = metric_thresholds_multilabel(yhat_raw, yy_dv)
+            for ix, label in enumerate(LABEL_TYPES):
+                lname = label2abbrev[label]
+                high_prec_fps = high_prec_false_positives(dv_loader, yhat_raw[:,ix], y[:,ix], prec_90_threshs[lname], out_dir, label2abbrev[label])
+                high_rec_fns = high_rec_false_negatives(dv_loader, yhat_raw[:,ix], y[:,ix], rec_90_threshs[lname], out_dir, label2abbrev[label])
         else:
             thresh, best_thresh_metrics, prec_90_thresh, rec_90_thresh = metrics_v_thresholds(yhat_raw, y)
             acc, prec, rec, f1, auc = best_thresh_metrics['acc'], best_thresh_metrics['prec'], best_thresh_metrics['rec'], best_thresh_metrics['f1'], best_thresh_metrics['auc'], 
@@ -367,8 +373,8 @@ def main(args):
             print(header_str)
             print(values_str)
 
-            high_prec_fps = high_prec_false_positives(dv_loader, yhat_raw, y, prec_90_thresh, out_dir)
-            high_rec_fns = high_rec_false_negatives(dv_loader, yhat_raw, y, rec_90_thresh, out_dir)
+            high_prec_fps = high_prec_false_positives(dv_loader, yhat_raw[:,1], y, prec_90_thresh, out_dir, 'binary')
+            high_rec_fns = high_rec_false_negatives(dv_loader, yhat_raw[:,1], y, rec_90_thresh, out_dir, 'binary')
 
 
 if __name__ == "__main__":

@@ -10,16 +10,8 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.multiclass import OneVsRestClassifier
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score
 
+from constants import *
 import multilabel_eval
-
-label_types = ['I-Imaging-related followup',
- 'I-Appointment-related followup',
- 'I-Medication-related followups',
- 'I-Procedure-related followup',
- 'I-Lab-related followup',
- 'I-Case-specific instructions for patient',
- 'I-Other helpful contextual information',
- ]
 
 def build_data_and_label_matrices(fname, cvec, tvec, lvec=None, fit=False):
     corpus = []
@@ -88,8 +80,57 @@ def metrics_v_thresholds(yhat_raw, y):
         best_thresh_metrics['prec@rec=99'] = metric_threshs['prec'][rec_99_ix]
     return best_thresh, best_thresh_metrics, prec_90_thresh, rec_90_thresh
 
-def high_rec_false_negatives(X_dv, yhat_raw, y, rec_90_thresh, out_dir, fname):
-    preds = yhat_raw[:,1] > rec_90_thresh
+def metric_thresholds_multilabel(yhat_raw, yy):
+    names = ["prec", "rec", "f1"]
+    metric_threshs = {label2abbrev[label]: defaultdict(list) for label in LABEL_TYPES}
+    per_label_metrics = {label2abbrev[label]: defaultdict(float) for label in LABEL_TYPES}
+    thresholds = np.arange(0,1,.01)[1:]
+    rec_90_threshs = {}
+    prec_90_threshs = {}
+    for ix,label in enumerate(LABEL_TYPES):
+        lname = label2abbrev[label]
+        for thresh in thresholds:
+            yhat = (yhat_raw[:,ix] > thresh).astype(int)
+            y = yy[:,ix]
+            prec = precision_score(y, yhat)
+            rec = recall_score(y, yhat)
+            f1 = f1_score(y, yhat)
+            for name, val in zip(names, [prec, rec, f1]):
+                metric_threshs[lname][name].append(val)
+        best_ix = np.nanargmax(metric_threshs[lname]['f1'])
+        best_thresh = thresholds[best_ix]
+        best_thresh_metrics = {f'{name}_maxf1_thresh': vals[best_ix] for name, vals in metric_threshs[lname].items()}
+        best_thresh_metrics['auc'] = roc_auc_score(yy[:,ix], yhat_raw[:,ix])
+
+        rec_90_ixs = np.where(np.array(metric_threshs[lname]['rec']) > 0.90)[0]
+        if len(rec_90_ixs) > 0:
+            rec_90_ix = rec_90_ixs[-1]
+            rec_90_thresh = thresholds[rec_90_ix]
+            best_thresh_metrics['prec@rec=90'] = metric_threshs[lname]['prec'][rec_90_ix]
+        else:
+            rec_90_ix = 0
+            rec_90_thresh = thresholds[rec_90_ix]
+            highest_rec = metric_threshs[lname]['rec'][rec_90_ix]
+            best_thresh_metrics['prec@rec=90'] = metric_threshs[lname]['prec'][rec_90_ix]
+
+        prec_90_ixs = np.where(np.array(metric_threshs[lname]['prec']) > 0.90)[0]
+        if len(prec_90_ixs) > 0:
+            prec_90_ix = prec_90_ixs[0]
+            prec_90_thresh = thresholds[prec_90_ix]
+            best_thresh_metrics['rec@prec=90'] = metric_threshs[lname]['rec'][prec_90_ix]
+        else:
+            prec_90_ix = -1
+            prec_90_thresh = thresholds[prec_90_ix]
+            highest_prec = metric_threshs[lname]['prec'][prec_90_ix]
+            best_thresh_metrics['rec@prec=90'] = metric_threshs[lname]['rec'][prec_90_ix]
+
+        per_label_metrics[lname].update(best_thresh_metrics)
+        rec_90_threshs[lname] = rec_90_thresh
+        prec_90_threshs[lname] = prec_90_thresh
+    return per_label_metrics, rec_90_threshs, prec_90_threshs
+
+def high_rec_false_negatives(X_dv, yhat_raw, y, rec_90_thresh, out_dir, fname, label_name):
+    preds = yhat_raw > rec_90_thresh
     fns = np.array(y).astype(bool) & ~preds
     fn_ixs = set(np.where(fns == True)[0])
     fn_sents = []
@@ -98,13 +139,13 @@ def high_rec_false_negatives(X_dv, yhat_raw, y, rec_90_thresh, out_dir, fname):
         for ix, row in enumerate(r):
             if ix in fn_ixs:
                 fn_sents.append(' '.join(eval(row['sentence'])))
-    with open(f'{out_dir}/rec_90_fns.txt', 'w') as of:
+    with open(f'{out_dir}/{label_name}_rec_90_fns.txt', 'w') as of:
         for sent in fn_sents:
             of.write(sent + "\n")
     return fn_sents
 
-def high_prec_false_positives(X_dv, yhat_raw, y, prec_90_thresh, out_dir, fname):
-    preds = yhat_raw[:,1] > prec_90_thresh
+def high_prec_false_positives(X_dv, yhat_raw, y, prec_90_thresh, out_dir, fname, label_name):
+    preds = yhat_raw > prec_90_thresh
     fps = ~np.array(y).astype(bool) & preds
     fp_ixs = set(np.where(fps == True)[0])
     fp_sents = []
@@ -113,7 +154,7 @@ def high_prec_false_positives(X_dv, yhat_raw, y, prec_90_thresh, out_dir, fname)
         for ix, row in enumerate(r):
             if ix in fp_ixs:
                 fp_sents.append(' '.join(eval(row['sentence'])))
-    with open(f'{out_dir}/prec_90_fps.txt', 'w') as of:
+    with open(f'{out_dir}/{label_name}_prec_90_fps.txt', 'w') as of:
         for sent in fp_sents:
             of.write(sent + "\n")
     return fp_sents
@@ -123,7 +164,7 @@ def main(args):
     tvec = TfidfVectorizer()
     lvec = None
     if args.task == 'finegrained':
-        lvec = CountVectorizer(tokenizer=lambda x: x.split(';'), lowercase=False, stop_words=[''], vocabulary=label_types)
+        lvec = CountVectorizer(tokenizer=lambda x: x.split(';'), lowercase=False, stop_words=[''], vocabulary=LABEL_TYPES)
 
     print("building train matrices")
     cX, tX, yy = build_data_and_label_matrices(args.train_fname, cvec, tvec, lvec, fit=True)
@@ -171,7 +212,7 @@ def main(args):
                 np.asarray(yy_dv), 
                 calc_auc=True, 
                 yhat_raw=yhat_raw,
-                label_order=label_types
+                label_order=LABEL_TYPES
                 )
         multilabel_eval.print_metrics(metrics, True)
 
@@ -179,16 +220,27 @@ def main(args):
         print(f"best threshold metrics (threshold = {thresh})")
         multilabel_eval.print_metrics(best_thresh_metrics)
 
-        label_type_metrics = multilabel_eval.f1_per_label_type(yhat_raw, np.asarray(yy_dv), label_types, thresh)
+        label_type_metrics = multilabel_eval.f1_per_label_type(yhat_raw, np.asarray(yy_dv), LABEL_TYPES, thresh)
         multilabel_eval.print_per_label_metrics(label_type_metrics)
 
-        for ix, label_name in enumerate(label_types):
-            print(f"###{label_name}###")
-            feats = clf.coef_[ix]
-            top_10_feats = np.argsort(feats)[::-1][:10]
-            for feat_ix in top_10_feats:
-                print(f"{ix2word[feat_ix]}: {feats[feat_ix]}")
-            print()
+        thresh_metrics, rec_90_threshs, prec_90_threshs = metric_thresholds_multilabel(yhat_raw, yy_dv)
+
+        if out_dir is not None and not os.path.exists(out_dir):
+            os.mkdir(out_dir)
+
+        if args.print_feats:
+            for ix, label in enumerate(LABEL_TYPES):
+                lname = label2abbrev[label]
+                print(f"###{lname}###")
+                feats = clf.coef_[ix]
+                top_10_feats = np.argsort(feats)[::-1][:10]
+                for feat_ix in top_10_feats:
+                    print(f"{ix2word[feat_ix]}: {feats[feat_ix]}")
+                print()
+
+            high_prec_fps = high_prec_false_positives(X_dv, yhat_raw[:,ix], yy_dv[:,ix], prec_90_threshs[lname], out_dir, dev_fname, lname)
+            high_rec_fps = high_rec_false_negatives(X_dv, yhat_raw[:,ix], yy_dv[:,ix], rec_90_threshs[lname], out_dir, dev_fname, lname)
+
     else:
         thresh, best_thresh_metrics, prec_90_thresh, rec_90_thresh = metrics_v_thresholds(yhat_raw, yy_dv)
         acc, prec, rec, f1, auc = best_thresh_metrics['acc'], best_thresh_metrics['prec'], best_thresh_metrics['rec'], best_thresh_metrics['f1'], best_thresh_metrics['auc'], 
@@ -196,11 +248,12 @@ def main(args):
         print("accuracy, precision, recall, f1, AUROC")
         print(f"{acc:.4f},{prec:.4f},{rec:.4f},{f1:.4f},{auc:.4f}")
 
-        feats = clf.coef_[0]
-        top_10_feats = np.argsort(feats)[::-1][:10]
-        for feat_ix in top_10_feats:
-            print(f"{ix2word[feat_ix]}: {feats[feat_ix]}")
-        print()
+        if args.print_feats:
+            feats = clf.coef_[0]
+            top_10_feats = np.argsort(feats)[::-1][:10]
+            for feat_ix in top_10_feats:
+                print(f"{ix2word[feat_ix]}: {feats[feat_ix]}")
+            print()
 
         prec_at_rec_vals = ['prec@rec=90', 'prec@rec=95']
         if 'prec@rec=99' in best_thresh_metrics:
@@ -209,13 +262,13 @@ def main(args):
         values_str = ','.join([f"{best_thresh_metrics[val]:.4f}" for val in prec_at_rec_vals])
         print(header_str)
         print(values_str)
-        #print(f"{best_thresh_metrics['prec@rec=90']:.4f},{best_thresh_metrics['prec@rec=95']:.4f},{best_thresh_metrics['prec@rec=99']:.4f}")
 
         if out_dir is not None and not os.path.exists(out_dir):
             os.mkdir(out_dir)
 
-        high_prec_fps = high_prec_false_positives(X_dv, yhat_raw, yy_dv, prec_90_thresh, out_dir, dev_fname)
-        high_rec_fns = high_rec_false_negatives(X_dv, yhat_raw, yy_dv, rec_90_thresh, out_dir, dev_fname)
+        high_prec_fps = high_prec_false_positives(X_dv, yhat_raw[:,1], yy_dv, prec_90_thresh, out_dir, dev_fname, 'binary')
+        high_rec_fns = high_rec_false_negatives(X_dv, yhat_raw[:,1], yy_dv, rec_90_thresh, out_dir, dev_fname, 'binary')
+    print(f"Finished! Results at {out_dir}")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -226,6 +279,7 @@ if __name__ == "__main__":
     parser.add_argument("--l1_ratio", type=float, default=0.5, help="(for elasticnet only) relative strength of l1 reg term")
     parser.add_argument("--max_iter", type=float, default=5000, help="max number of iterations taken for solvers to converge")
     parser.add_argument("--feature_type", choices=['plain', 'tfidf'], default='plain', help="which features to use - tfidf weighted ('tfidf') or not ('plain')")
+    parser.add_argument("--print_feats", action="store_true")
     args = parser.parse_args()
 
     main(args)
