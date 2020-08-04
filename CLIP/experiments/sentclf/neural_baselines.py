@@ -12,6 +12,7 @@ import time
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score
 import torch
 from torch.utils.data import Dataset, DataLoader
 import torch.nn as nn
@@ -24,10 +25,11 @@ sys.path.append('../tagger')
 from train import get_embeddings
 
 from constants import *
+from bow import metrics_v_thresholds
 
 class CNN(nn.Module):
 
-    def __init__(self, pretrained_embs, embed_size, vocab_size, num_filter_maps=100, filter_size=4):
+    def __init__(self, pretrained_embs, embed_size, task, vocab_size, num_filter_maps=100, filter_size=4):
         super(CNN, self).__init__()
         if pretrained_embs:
             embs = torch.Tensor(pretrained_embs)
@@ -37,7 +39,11 @@ class CNN(nn.Module):
         self.conv = nn.Conv1d(embed_size, num_filter_maps, kernel_size=filter_size, padding=round(filter_size/2))
         nn.init.xavier_uniform_(self.conv.weight)
 
-        self.fc = nn.Linear(num_filter_maps, len(LABEL_TYPES))
+        self.task = task
+        if self.task == 'finegrained':
+            self.fc = nn.Linear(num_filter_maps, len(LABEL_TYPES))
+        else:
+            self.fc = nn.Linear(num_filter_maps, 2)
         nn.init.xavier_uniform_(self.fc.weight)
 
     def forward(self, x, target):
@@ -45,23 +51,25 @@ class CNN(nn.Module):
         x = self.embed(x)
         x = x.transpose(1,2)
         # conv/max-pooling
-        try:
-            x = self.conv(x)
-        except:
-            import pdb; pdb.set_trace()
+        x = self.conv(x)
         x = F.max_pool1d(torch.tanh(x), kernel_size=x.size()[2])
         x = x.squeeze(dim=2)
         #linear output
         x = self.fc(x)
         #sigmoid to get predictions
-        loss = F.binary_cross_entropy_with_logits(x, target)
-        yhat = torch.sigmoid(x)
+        if self.task == 'finegrained':
+            loss = F.binary_cross_entropy_with_logits(x, target)
+            yhat = torch.sigmoid(x)
+        else:
+            loss = F.cross_entropy(x, target)
+            yhat = torch.softmax(x, dim=1)
         return yhat, loss
 
 class SentDataset(Dataset):
-    def __init__(self, fname, word2ix=None):
+    def __init__(self, fname, task, word2ix=None):
         self.sents = pd.read_csv(fname)
         self.tok_cnt = Counter()
+        self.task = task
         if word2ix is not None:
             self.word2ix = word2ix
             self.ix2word = {ix:word for word,ix in self.word2ix.items()}
@@ -76,7 +84,10 @@ class SentDataset(Dataset):
     def __getitem__(self, idx):
         row = self.sents.iloc[idx]
         sent = [x.lower() for x in eval(row.sentence)]
-        labels = eval(row.labels)
+        if args.task == 'finegrained':
+            labels = eval(row.labels)
+        else:
+            labels = row.labels
         doc_id = row.doc_id
         return sent, labels, doc_id
 
@@ -99,11 +110,12 @@ class SentDataset(Dataset):
         self.ix2word = {ix:word for word,ix in self.word2ix.items()}
 
 def collate(batch, word2ix, task):
-    sents, labels, doc_ids = [], [], []
+    sents, labels, doc_ids, toks = [], [], [], []
     # sort by decreasing length
     batch = sorted(batch, key=lambda x: -len(x[0]))
     max_length = len(batch[0][0])
     for sent, label, doc_id in batch:
+        toks.append(sent)
         sent = [word2ix.get(w, word2ix[UNK]) for w in sent]
         sent.extend([0 for ix in range(len(sent), max_length)])
         sents.append(sent)
@@ -113,10 +125,13 @@ def collate(batch, word2ix, task):
             label[label_ixs] = 1
             labels.append(label)
         else:
-            import pdb; pdb.set_trace()
-            labels.append(label)
+            labels.append(int(label))
         doc_ids.append(doc_id)
-    return torch.LongTensor(sents), torch.Tensor(labels), doc_ids
+    if task == 'finegrained':
+        labels = torch.Tensor(labels)
+    else:
+        labels = torch.LongTensor(labels)
+    return torch.LongTensor(sents), labels, doc_ids, toks
 
 def check_best_model_and_save(model, metrics_hist, criterion, out_dir):
     is_best = False
@@ -159,10 +174,38 @@ def early_stop(metrics_hist, criterion, patience):
     else:
         return False
 
+def high_prec_false_positives(dv_loader, yhat_raw, y, prec_90_thresh, out_dir):
+    preds = yhat_raw[:,1] > prec_90_thresh
+    fps = ~np.array(y).astype(bool) & preds
+    fp_ixs = set(np.where(fps == True)[0])
+    fp_sents = []
+    for ix, x in tqdm(enumerate(dv_loader)):
+        _, _, _, toks = x
+        if ix in fp_ixs:
+            fp_sents.append(' '.join(toks[0]))
+    with open(f'{out_dir}/prec_90_fps.txt', 'w') as of:
+        for sent in fp_sents:
+            of.write(sent + "\n")
+    return fp_sents 
+
+def high_rec_false_negatives(dv_loader, yhat_raw, y, rec_90_thresh, out_dir):
+    preds = yhat_raw[:,1] > rec_90_thresh
+    fns = np.array(y).astype(bool) & ~preds
+    fn_ixs = set(np.where(fns == True)[0])
+    fn_sents = []
+    for ix, x in tqdm(enumerate(dv_loader)):
+        _, _, _, toks = x
+        if ix in fn_ixs:
+            fn_sents.append(' '.join(toks[0]))
+    with open(f'{out_dir}/rec_90_fns.txt', 'w') as of:
+        for sent in fn_sents:
+            of.write(sent + "\n")
+    return fn_sents 
+
 def main(args):
     dev_fname = args.train_fname.replace('train', 'val')
     test_fname = args.train_fname.replace('train', 'test')
-    tr_data = SentDataset(args.train_fname)
+    tr_data = SentDataset(args.train_fname, args.task)
     if not args.vocab_file:
         tr_data.build_vocab()
         date_str = date.today().strftime('%Y%m%d')
@@ -172,7 +215,7 @@ def main(args):
     else:
         tr_data.set_vocab(args.vocab_file)
     tr_loader = DataLoader(tr_data, batch_size=args.batch_size, shuffle=True, collate_fn=lambda batch: collate(batch, tr_data.word2ix, args.task))
-    dv_data = SentDataset(dev_fname, tr_data.word2ix)
+    dv_data = SentDataset(dev_fname, args.task, tr_data.word2ix)
     dv_loader = DataLoader(dv_data, batch_size=1, shuffle=False, collate_fn=lambda batch: collate(batch, tr_data.word2ix, args.task))
 
     # load pre-trained embeddings
@@ -187,7 +230,7 @@ def main(args):
 
 
     # add one for UNK
-    model = CNN(pretrained_embs, args.embed_size, len(tr_data.word2ix)+1)
+    model = CNN(pretrained_embs, args.embed_size, args.task, len(tr_data.word2ix)+1)
     model.to(DEVICE)
 
     optimizer = optim.Adam(model.parameters(), weight_decay=args.weight_decay, lr=args.lr)
@@ -202,7 +245,7 @@ def main(args):
     stop_training = False
     for epoch in range(args.max_epochs):
         for batch_ix, batch in tqdm(enumerate(tr_loader)):
-            sents, labels, doc_ids = batch
+            sents, labels, doc_ids, _ = batch
             optimizer.zero_grad()
             yhat, loss = model(sents.to(DEVICE), labels.to(DEVICE))
             losses.append(loss.item())
@@ -219,16 +262,27 @@ def main(args):
             yhat = []
             y = []
             for ix, x in tqdm(enumerate(dv_loader)):
-                sent, label, doc_id = x
+                sent, label, doc_id, _ = x
                 pred, _ = model(sent.to(DEVICE), label.to(DEVICE))
                 pred = pred.cpu().numpy()[0]
                 yhat_raw.append(pred)
-                yhat.append(np.round(pred))
+                if args.task == 'finegrained':
+                    yhat.append(np.round(pred))
+                else:
+                    yhat.append(np.argmax(pred))
                 y.append(label.cpu().numpy()[0])
             yhat = np.array(yhat)
             yhat_raw = np.array(yhat_raw)
             y = np.array(y)
-            metrics = multilabel_eval.all_metrics(yhat, y, k=3, yhat_raw=yhat_raw, calc_auc=True, label_order=LABEL_TYPES)
+            if args.task == 'finegrained':
+                metrics = multilabel_eval.all_metrics(yhat, y, k=3, yhat_raw=yhat_raw, calc_auc=True, label_order=LABEL_TYPES)
+            else:
+                acc = accuracy_score(y, yhat)
+                prec = precision_score(y, yhat)
+                rec = recall_score(y, yhat)
+                f1 = f1_score(y, yhat)
+                auc = roc_auc_score(y, yhat_raw[:,1])
+                metrics = {'acc': acc, 'prec': prec, 'rec': rec, 'f1': f1, 'auc': auc}
 
             for name, metric in metrics.items():
                 metrics_hist[name].append(metric)
@@ -245,7 +299,11 @@ def main(args):
                 print(f"{args.criterion} hasn't improved in {args.patience} epochs, early stopping...")
                 stop_training = True
                 break
-            multilabel_eval.print_metrics(metrics, True)
+            if args.task == 'finegrained':
+                multilabel_eval.print_metrics(metrics, True)
+            else:
+                print("accuracy, precision, recall, f1, AUROC")
+                print(f"{acc:.4f},{prec:.4f},{rec:.4f},{f1:.4f},{auc:.4f}")
  
         if stop_training:
             break
@@ -271,25 +329,47 @@ def main(args):
         yhat = []
         y = []
         for ix, x in tqdm(enumerate(dv_loader)):
-            sent, label, doc_id = x
+            sent, label, doc_id, _ = x
             pred, _ = model(sent.to(DEVICE), label.to(DEVICE))
             pred = pred.cpu().numpy()[0]
             yhat_raw.append(pred)
-            yhat.append(np.round(pred))
+            if args.task == 'finegrained':
+                yhat.append(np.round(pred))
+            else:
+                yhat.append(np.argmax(pred))
             y.append(label.cpu().numpy()[0])
         yhat = np.array(yhat)
         yhat_raw = np.array(yhat_raw)
         y = np.array(y)
-        metrics = multilabel_eval.all_metrics(yhat, y, k=3, yhat_raw=yhat_raw, calc_auc=True, label_order=LABEL_TYPES)
-        print(args)
-        multilabel_eval.print_metrics(metrics, True)
+        if args.task == 'finegrained':
+            metrics = multilabel_eval.all_metrics(yhat, y, k=3, yhat_raw=yhat_raw, calc_auc=True, label_order=LABEL_TYPES)
+            print(args)
+            multilabel_eval.print_metrics(metrics, True)
 
-        thresh, best_thresh_metrics = multilabel_eval.metrics_v_thresholds(yhat_raw, y)
-        print(f"best threshold metrics (threshold = {thresh})")
-        multilabel_eval.print_metrics(best_thresh_metrics)
+            thresh, best_thresh_metrics = multilabel_eval.metrics_v_thresholds(yhat_raw, y)
+            print(f"best threshold metrics (threshold = {thresh})")
+            multilabel_eval.print_metrics(best_thresh_metrics)
 
-        label_type_metrics = multilabel_eval.f1_per_label_type(yhat_raw, y, LABEL_TYPES, thresh)
-        multilabel_eval.print_per_label_metrics(label_type_metrics)
+            label_type_metrics = multilabel_eval.f1_per_label_type(yhat_raw, y, LABEL_TYPES, thresh)
+            multilabel_eval.print_per_label_metrics(label_type_metrics)
+        else:
+            thresh, best_thresh_metrics, prec_90_thresh, rec_90_thresh = metrics_v_thresholds(yhat_raw, y)
+            acc, prec, rec, f1, auc = best_thresh_metrics['acc'], best_thresh_metrics['prec'], best_thresh_metrics['rec'], best_thresh_metrics['f1'], best_thresh_metrics['auc'], 
+            print(f"best threshold metrics (threshold={thresh})")
+            print("accuracy, precision, recall, f1, AUROC")
+            print(f"{acc:.4f},{prec:.4f},{rec:.4f},{f1:.4f},{auc:.4f}")
+            
+            prec_at_rec_vals = ['prec@rec=90', 'prec@rec=95']
+            if 'prec@rec=99' in best_thresh_metrics:
+                prec_at_rec_vals.append('prec@rec=99')
+            header_str = ','.join(prec_at_rec_vals)
+            values_str = ','.join([f"{best_thresh_metrics[val]:.4f}" for val in prec_at_rec_vals])
+            print(header_str)
+            print(values_str)
+
+            high_prec_fps = high_prec_false_positives(dv_loader, yhat_raw, y, prec_90_thresh, out_dir)
+            high_rec_fns = high_rec_false_negatives(dv_loader, yhat_raw, y, rec_90_thresh, out_dir)
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -309,6 +389,10 @@ if __name__ == "__main__":
     parser.add_argument("--vocab_file", type=str, help="path to precomputed vocab")
     parser.add_argument("--seed", type=int, default=11, help="random seed")
     args = parser.parse_args()
+
+    # change default criterion to f1 for binary
+    if args.task == 'binary' and args.criterion == 'f1_micro':
+        args.criterion = 'f1'
 
     random.seed(args.seed)
     np.random.seed(args.seed)
