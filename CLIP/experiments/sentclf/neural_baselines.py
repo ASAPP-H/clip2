@@ -84,7 +84,7 @@ class SentDataset(Dataset):
     def __getitem__(self, idx):
         row = self.sents.iloc[idx]
         sent = [x.lower() for x in eval(row.sentence)]
-        if args.task == 'finegrained':
+        if self.task == 'finegrained':
             labels = eval(row.labels)
         else:
             labels = row.labels
@@ -186,6 +186,12 @@ def high_prec_false_positives(dv_loader, yhat_raw, y, prec_90_thresh, out_dir, l
     with open(f'{out_dir}/{label_name}_prec_90_fps.txt', 'w') as of:
         for sent in fp_sents:
             of.write(sent + "\n")
+    if label_name != 'binary':
+        with open(f'{out_dir}/typed_prec_90_fps.txt', 'a') as of:
+            of.write(f"#### {label_name} ####\n")
+            for sent in fp_sents[:5]:
+                of.write(sent + " [[END]]\n")
+            of.write("\n")
     return fp_sents 
 
 def high_rec_false_negatives(dv_loader, yhat_raw, y, rec_90_thresh, out_dir, label_name):
@@ -200,6 +206,12 @@ def high_rec_false_negatives(dv_loader, yhat_raw, y, rec_90_thresh, out_dir, lab
     with open(f'{out_dir}/{label_name}_rec_90_fns.txt', 'w') as of:
         for sent in fn_sents:
             of.write(sent + "\n")
+    if label_name != 'binary':
+        with open(f'{out_dir}/typed_rec_90_fns.txt', 'a') as of:
+            of.write(f"#### {label_name} ####\n")
+            for sent in fn_sents[:5]:
+                of.write(sent + " [[END]]\n")
+            of.write("\n")
     return fn_sents 
 
 def main(args):
@@ -245,6 +257,8 @@ def main(args):
     stop_training = False
     for epoch in range(args.max_epochs):
         for batch_ix, batch in tqdm(enumerate(tr_loader)):
+            if batch_ix > args.max_iter:
+                break
             sents, labels, doc_ids, _ = batch
             optimizer.zero_grad()
             yhat, loss = model(sents.to(DEVICE), labels.to(DEVICE))
@@ -353,7 +367,7 @@ def main(args):
             label_type_metrics = multilabel_eval.f1_per_label_type(yhat_raw, y, LABEL_TYPES, thresh)
             multilabel_eval.print_per_label_metrics(label_type_metrics)
 
-            thresh_metrics, rec_90_threshs, prec_90_threshs = metric_thresholds_multilabel(yhat_raw, yy_dv)
+            thresh_metrics, rec_90_threshs, prec_90_threshs = metric_thresholds_multilabel(yhat_raw, y)
             for ix, label in enumerate(LABEL_TYPES):
                 lname = label2abbrev[label]
                 high_prec_fps = high_prec_false_positives(dv_loader, yhat_raw[:,ix], y[:,ix], prec_90_threshs[lname], out_dir, label2abbrev[label])
@@ -365,7 +379,9 @@ def main(args):
             print("accuracy, precision, recall, f1, AUROC")
             print(f"{acc:.4f},{prec:.4f},{rec:.4f},{f1:.4f},{auc:.4f}")
             
-            prec_at_rec_vals = ['prec@rec=90', 'prec@rec=95']
+            prec_at_rec_vals = ['prec@rec=90']
+            if 'prec@rec=95' in best_thresh_metrics:
+                prec_at_rec_vals.append('prec@rec=95')
             if 'prec@rec=99' in best_thresh_metrics:
                 prec_at_rec_vals.append('prec@rec=99')
             header_str = ','.join(prec_at_rec_vals)
@@ -384,6 +400,7 @@ if __name__ == "__main__":
     parser.add_argument("--embed_file", type=str, help="path to a file holding pre-trained token embeddings")
     parser.add_argument("--task", choices=['binary', 'finegrained'], default='finegrained')
     parser.add_argument("--max_epochs", type=int, default=100)
+    parser.add_argument("--max_iter", type=int, default=1e10, help="max iterations (batches) to train on - use for debugging")
     parser.add_argument("--criterion", type=str, default="f1_micro", required=False, help="metric to use for early stopping")
     parser.add_argument("--patience", type=int, default=5, required=False, help="epochs to wait for improved criterion before early stopping (default 5)")
     parser.add_argument("--lr", type=float, default=0.001)

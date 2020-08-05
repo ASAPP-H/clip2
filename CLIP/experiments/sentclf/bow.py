@@ -1,6 +1,7 @@
 import argparse
 from collections import defaultdict
 import csv
+import json
 import os
 import time
 
@@ -69,13 +70,15 @@ def metrics_v_thresholds(yhat_raw, y):
     rec_90_thresh = thresholds[rec_90_ix]
     best_thresh_metrics['prec@rec=90'] = metric_threshs['prec'][rec_90_ix]
 
-    rec_95_ix = np.where(np.array(metric_threshs['rec']) > 0.95)[0][-1]
-    rec_95_thresh = thresholds[rec_95_ix]
-    best_thresh_metrics['prec@rec=95'] = metric_threshs['prec'][rec_95_ix]
+    rec_95_ixs = np.where(np.array(metric_threshs['rec']) > 0.95)[0]
+    if len(rec_95_ixs > 0):
+        rec_95_ix = rec_95_ixs[-1]
+        rec_95_thresh = thresholds[rec_95_ix]
+        best_thresh_metrics['prec@rec=95'] = metric_threshs['prec'][rec_95_ix]
 
     rec_99_ixs = np.where(np.array(metric_threshs['rec']) > 0.99)[0]
     if len(rec_99_ixs > 0):
-        rec_99_ix = np.where(np.array(metric_threshs['rec']) > 0.99)[0][-1]
+        rec_99_ix = rec_99_ixs[-1]
         rec_99_thresh = thresholds[rec_99_ix]
         best_thresh_metrics['prec@rec=99'] = metric_threshs['prec'][rec_99_ix]
     return best_thresh, best_thresh_metrics, prec_90_thresh, rec_90_thresh
@@ -142,6 +145,12 @@ def high_rec_false_negatives(X_dv, yhat_raw, y, rec_90_thresh, out_dir, fname, l
     with open(f'{out_dir}/{label_name}_rec_90_fns.txt', 'w') as of:
         for sent in fn_sents:
             of.write(sent + "\n")
+    if label_name != 'binary':
+        with open(f'{out_dir}/typed_rec_90_fns.txt', 'a') as of:
+            of.write(f"#### {label_name} ####\n")
+            for sent in fn_sents[:5]:
+                of.write(sent + " [[END]]\n")
+            of.write("\n")
     return fn_sents
 
 def high_prec_false_positives(X_dv, yhat_raw, y, prec_90_thresh, out_dir, fname, label_name):
@@ -157,6 +166,12 @@ def high_prec_false_positives(X_dv, yhat_raw, y, prec_90_thresh, out_dir, fname,
     with open(f'{out_dir}/{label_name}_prec_90_fps.txt', 'w') as of:
         for sent in fp_sents:
             of.write(sent + "\n")
+    if label_name != 'binary':
+        with open(f'{out_dir}/typed_prec_90_fps.txt', 'a') as of:
+            of.write(f"#### {label_name} ####\n")
+            for sent in fp_sents[:5]:
+                of.write(sent + " [[END]]\n")
+            of.write("\n")
     return fp_sents
 
 def main(args):
@@ -228,9 +243,9 @@ def main(args):
         if out_dir is not None and not os.path.exists(out_dir):
             os.mkdir(out_dir)
 
-        if args.print_feats:
-            for ix, label in enumerate(LABEL_TYPES):
-                lname = label2abbrev[label]
+        for ix, label in enumerate(LABEL_TYPES):
+            lname = label2abbrev[label]
+            if args.print_feats:
                 print(f"###{lname}###")
                 feats = clf.coef_[ix]
                 top_10_feats = np.argsort(feats)[::-1][:10]
@@ -238,8 +253,8 @@ def main(args):
                     print(f"{ix2word[feat_ix]}: {feats[feat_ix]}")
                 print()
 
-            high_prec_fps = high_prec_false_positives(X_dv, yhat_raw[:,ix], yy_dv[:,ix], prec_90_threshs[lname], out_dir, dev_fname, lname)
-            high_rec_fps = high_rec_false_negatives(X_dv, yhat_raw[:,ix], yy_dv[:,ix], rec_90_threshs[lname], out_dir, dev_fname, lname)
+            high_prec_fps = high_prec_false_positives(X_dv, yhat_raw[:,ix], np.asarray(yy_dv)[:,ix], prec_90_threshs[lname], out_dir, dev_fname, lname)
+            high_rec_fps = high_rec_false_negatives(X_dv, yhat_raw[:,ix], np.asarray(yy_dv)[:,ix], rec_90_threshs[lname], out_dir, dev_fname, lname)
 
     else:
         thresh, best_thresh_metrics, prec_90_thresh, rec_90_thresh = metrics_v_thresholds(yhat_raw, yy_dv)
@@ -268,6 +283,14 @@ def main(args):
 
         high_prec_fps = high_prec_false_positives(X_dv, yhat_raw[:,1], yy_dv, prec_90_thresh, out_dir, dev_fname, 'binary')
         high_rec_fns = high_rec_false_negatives(X_dv, yhat_raw[:,1], yy_dv, rec_90_thresh, out_dir, dev_fname, 'binary')
+
+    # save args
+    with open(f'{out_dir}/args.json', 'w') as of:
+        of.write(json.dumps(args.__dict__, indent=2) + "\n")
+    # save metrics
+    with open(f'{out_dir}/metrics.json', 'w') as of:
+        of.write(json.dumps(best_thresh_metrics, indent=2) + "\n")
+
     print(f"Finished! Results at {out_dir}")
 
 if __name__ == "__main__":

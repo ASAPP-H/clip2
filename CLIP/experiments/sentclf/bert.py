@@ -28,10 +28,10 @@ from typing import Callable, Dict, Optional
 import numpy as np
 import torch
 from torch.utils.data import DataLoader
+from tqdm import tqdm
 
-from transformers import AutoConfig, AutoModelForSequenceClassification, AutoTokenizer, GlueDataset
+from transformers import AutoConfig, AutoModelForSequenceClassification, AutoTokenizer
 from transformers import BertConfig, BertTokenizer, BertForSequenceClassification
-from transformers import GlueDataTrainingArguments as DataTrainingArguments
 from transformers import (
     Trainer,
     TrainingArguments,
@@ -42,6 +42,7 @@ from transformers import (
 )
 
 from bert_model import BertForSequenceMultilabelClassification, BertCNNForSequenceMultilabelClassification
+from bow import metrics_v_thresholds, metric_thresholds_multilabel
 from constants import *
 import multilabel_eval
 from neural_baselines import SentDataset
@@ -83,7 +84,8 @@ def main():
     parser.add_argument("model", choices=['bert', 'clinicalbert'])
     parser.add_argument("--max_epochs", type=int, default=5)
     parser.add_argument("--criterion", type=str, default="f1_micro", required=False, help="metric to use for early stopping")
-    parser.add_argument("--patience", type=int, default=5, required=False, help="epochs to wait for improved criterion before early stopping (default 3)")
+    parser.add_argument("--task", choices=['binary', 'finegrained'], default='finegrained')
+    parser.add_argument("--patience", type=int, default=3, required=False, help="epochs to wait for improved criterion before early stopping (default 3)")
     parser.add_argument("--lr", type=float, default=5e-5)
     parser.add_argument("--weight_decay", type=float, default=0)
     parser.add_argument("--batch_size", type=int, default=8)
@@ -150,13 +152,13 @@ def main():
 
     # Get datasets
     #train
-    train_dataset = SentDataset(args.train_fname)
+    train_dataset = SentDataset(args.train_fname, args.task)
     #dev
     dev_fname = args.train_fname.replace('train', 'val')
-    eval_dataset = SentDataset(dev_fname)
+    eval_dataset = SentDataset(dev_fname, args.task)
     #test
     test_fname = args.train_fname.replace('train', 'test')
-    test_dataset = SentDataset(test_fname)
+    test_dataset = SentDataset(test_fname, args.task)
 
     timestamp = time.strftime('%b_%d_%H:%M:%S', time.localtime())
     out_dir = f"results/{args.model}_{timestamp}"
@@ -197,10 +199,67 @@ def main():
     eval_results = {}
     logger.info("*** Evaluate ***")
 
-    #trainer.compute_metrics = compute_metrics(eval_dataset.args.task_name)
-    eval_result = trainer.evaluate(eval_dataset=eval_dataset)
+    #eval_result = trainer.evaluate(eval_dataset=eval_dataset)
 
-    import pdb; pdb.set_trace()
+    # run own evaluation loop to get false positive examples, compute specialized metrics, etc
+    dv_loader = DataLoader(eval_dataset, batch_size=1, shuffle=False, collate_fn=lambda batch: collator(batch, tokenizer))
+    with torch.no_grad():
+        model.eval()
+        yhat_raw = []
+        yhat = []
+        y = []
+        for ix, x in tqdm(enumerate(dv_loader)):
+            if ix > args.max_steps * 100:
+                break
+            loss, pred = model(**x)
+            pred = torch.sigmoid(pred)
+            pred = pred.cpu().numpy()[0]
+            yhat_raw.append(pred)
+            if args.task == 'finegrained':
+                yhat.append(np.round(pred))
+            else:
+                yhat.append(np.argmax(pred))
+            y.append(x['labels'].cpu().numpy()[0])
+        yhat = np.array(yhat)
+        yhat_raw = np.array(yhat_raw)
+        y = np.array(y)
+        if args.task == 'finegrained':
+            metrics = multilabel_eval.all_metrics(yhat, y, k=3, yhat_raw=yhat_raw, calc_auc=True, label_order=LABEL_TYPES)
+            print(args)
+            multilabel_eval.print_metrics(metrics, True)
+
+            thresh, best_thresh_metrics = multilabel_eval.metrics_v_thresholds(yhat_raw, y)
+            print(f"best threshold metrics (threshold = {thresh})")
+            multilabel_eval.print_metrics(best_thresh_metrics)
+
+            label_type_metrics = multilabel_eval.f1_per_label_type(yhat_raw, y, LABEL_TYPES, thresh)
+            multilabel_eval.print_per_label_metrics(label_type_metrics)
+
+            thresh_metrics, rec_90_threshs, prec_90_threshs = metric_thresholds_multilabel(yhat_raw, y)
+            for ix, label in enumerate(LABEL_TYPES):
+                lname = label2abbrev[label]
+                high_prec_fps = high_prec_false_positives(dv_loader, yhat_raw[:,ix], y[:,ix], prec_90_threshs[lname], out_dir, label2abbrev[label])
+                high_rec_fns = high_rec_false_negatives(dv_loader, yhat_raw[:,ix], y[:,ix], rec_90_threshs[lname], out_dir, label2abbrev[label])
+        else:
+            thresh, best_thresh_metrics, prec_90_thresh, rec_90_thresh = metrics_v_thresholds(yhat_raw, y)
+            acc, prec, rec, f1, auc = best_thresh_metrics['acc'], best_thresh_metrics['prec'], best_thresh_metrics['rec'], best_thresh_metrics['f1'], best_thresh_metrics['auc'], 
+            print(f"best threshold metrics (threshold={thresh})")
+            print("accuracy, precision, recall, f1, AUROC")
+            print(f"{acc:.4f},{prec:.4f},{rec:.4f},{f1:.4f},{auc:.4f}")
+            
+            prec_at_rec_vals = ['prec@rec=90']
+            if 'prec@rec=95' in best_thresh_metrics:
+                prec_at_rec_vals.append('prec@rec=95')
+            if 'prec@rec=99' in best_thresh_metrics:
+                prec_at_rec_vals.append('prec@rec=99')
+            header_str = ','.join(prec_at_rec_vals)
+            values_str = ','.join([f"{best_thresh_metrics[val]:.4f}" for val in prec_at_rec_vals])
+            print(header_str)
+            print(values_str)
+
+            high_prec_fps = high_prec_false_positives(dv_loader, yhat_raw[:,1], y, prec_90_thresh, out_dir, 'binary')
+            high_rec_fns = high_rec_false_negatives(dv_loader, yhat_raw[:,1], y, rec_90_thresh, out_dir, 'binary')
+
 
     output_eval_file = os.path.join(
         training_args.output_dir, f"eval_results_{eval_dataset.args.task_name}.txt"
