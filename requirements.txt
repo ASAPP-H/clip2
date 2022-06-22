@@ -35,7 +35,7 @@ murmurhash==1.0.2
 networkx==1.11
 nltk==3.5
 nnsplit==0.2.2
-numpy==1.18.1
+numpy==1.22.0
 opencv-python==4.2.0.34
 pandas==1.0.1
 pendulum==2.1.0
